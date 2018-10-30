@@ -20,13 +20,13 @@ want to use .sendto() which may require extra fields:
 
 Purported explanation of the fields as seen by .recvfrom():
 
-  https://stackoverflow.com/questions/42821309/how-to-interpret-result-of-recvfrom-raw-socket
+https://stackoverflow.com/questions/42821309/how-to-interpret-result-of-recvfrom-raw-socket
 
-  # [0]: interface name (eg 'eth0')
-  # [1]: protocol at the physical level (defined in linux/if_ether.h)
-  # [2]: packet type (defined in linux/if_packet.h)
-  # [3]: ARPHRD (defined in linux/if_arp.h)
-  # [4]: physical address
+* [0]: interface name (eg 'eth0')
+* [1]: protocol at the physical level (defined in linux/if_ether.h)
+* [2]: packet type (defined in linux/if_packet.h)
+* [3]: ARPHRD (defined in linux/if_arp.h)
+* [4]: physical address
 
 This does seem to match up with `sockaddr_ll` as described in `packet(7)`.
 
@@ -38,7 +38,7 @@ zero or just omits them...probably the former, but can read the
 _socket source code if necessary.  OK, I read the source code, and it
 looks like the sockaddr_ll component ordering is consistant between
 read and write; when writing, the last three are optional as far as
-the PyArg_ParseTuple() format is concerned, but since we do need to
+the `PyArg_ParseTuple()` format is concerned, but since we do need to
 specify the MAC address, which is the last element of the tuple, we
 also need to specify the two zeroed fields.
 
