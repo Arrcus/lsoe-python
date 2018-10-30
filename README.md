@@ -41,3 +41,12 @@ read and write; when writing, the last three are optional as far as
 the PyArg_ParseTuple() format is concerned, but since we do need to
 specify the MAC address, which is the last element of the tuple, we
 also need to specify the two zeroed fields.
+
+IEEE considers EtherTypes to be a scarce resource, so they allocated
+some playground space for development and private protocols:
+
+Name                            | Value
+--------------------------------|------
+Local Experimental EtherType 1  | 88-B5
+Local Experimental EtherType 2  | 88-B6
+OUI Extended EtherType          | 88-B7
