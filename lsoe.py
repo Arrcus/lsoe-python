@@ -134,9 +134,6 @@ class EtherIO(object):
         self.ioloop.PeriodicCallback(self._gc_frames, fragment_gc_seconds * 500)
         # Probably need one or more self.ioloop.spawn_callback() calls here
 
-    def close(self):
-        self.ioloop.remove_handler(self.s)
-
     def _handle_read(self, events):
         pkt, sa_ll = s.recvfrom(ETH_DATA_LEN)
         sa_ll = SockAddrLL(*sa_ll)
@@ -147,36 +144,23 @@ class EtherIO(object):
         if msg is not None:
             self.q.put_nowait(msg)
 
-    def _filter_frames(self, func):
-        # This may be premature optimization, but the intent is a more efficient
-        # implementation of:
-        #
-        #   self.frames[:] = [f for i, f in enumerate(self.frames) if func(f, i)]
-        #
-        i, n = 0, len(self.frames)
-        while i < n:
-            if func(self.frames[i], i):
-                i += 1
-            else:
-                del self.frames[i]
-                n -= 1
-
     def _gc_frames(self):
         threshold = time.time() - fragment_gc_seconds
-        self._filter_frames(lambda f, i: f.timestamp >= threshold)
+        self.frames.sort(key = lambda f: f.timestamp)
+        while self.frames[0].timestamp < threshold:
+            del self.frames[0]
 
     def _reassemble(self, frame):
         # Allow duplication and reordering, disallow other inconsistencies
         self.frames.append(frame)
         self.frames.sort(key = lambda f: (f.pdu_number, -f.timestamp))
-        self._filter_frames(lambda f, i: f.pdu_number >= i)
         if not self.frames[-1].is_final_frame:
             return None
-        if any(f.is_final_frame for f in msg[:-1]):
+        self.frames[:] = [f for i, f in enumerate(self.frames) if f.pdu_number >= i]
+        if any(f.is_final_frame for f in msg[:-1]) or \
+           any(f.pdu_number != i for i, f in enumerate(self.frames)):
             return None
-        if any(f.pdu_number != i for i, f in enumerate(self.frames)):
-            return None
-        msg = "".join(self.frames)
+        msg = b"".join(self.frames)
         del self.frames[:] 
         return msg
 
@@ -189,3 +173,6 @@ class EtherIO(object):
     @tornado.gen.coroutine
     def write(self, frame):
         self.s.sendto(frame.bytes, (frame.ifname, frame.protocol, 0, 0, frame.macaddr))
+
+    def close(self):
+        self.ioloop.remove_handler(self.s)
