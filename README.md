@@ -50,3 +50,24 @@ Name                            | Value
 Local Experimental EtherType 1  | 88-B5
 Local Experimental EtherType 2  | 88-B6
 OUI Extended EtherType          | 88-B7
+
+
+Other fun implementation stuff
+------------------------------
+
+The similarity between the Python 3 `byte` and `bytearray` types may
+allow us to do something cut with the Frame and Message classes: use
+`byte` for received messages, `bytearray` for messages we're
+composing, and we automatically get the check for the writable
+operations only applying to stuff we're composing.
+
+Per discussion with Randy just now: checksums are over the frame
+payload not over the message (ie, text in 5.2.1 is wrong here).  In
+SLSOE the signature will be over the message with all the checksum
+fields zeroed, so we're still checksuming the frames rather than
+signing the checksums or leaving the checksum blank on the last frame
+or ....
+
+In -02 the frames within a message do have sequence numbers.  Messages
+do not have sequence numbers in -02, protocol pretty much assumes
+lock-step for everything where that might matter.
