@@ -121,20 +121,6 @@ class EtherFrame(object):
             result = (result >> 32) + (result & 0xFFFFFFFF)
         return result
 
-    def try_reassembly(self, frames):
-        # Allow duplication and reordering, disallow other inconsistencies
-        frames.append(self)
-        frames.sort(key = lambda x: (x.pdu_number, x.timestamp))
-        msg = []
-        for f in frames:
-            if f.pdu_number == len(msg):
-                msg.append(f)
-        if msg and msg[-1].is_final_frame and all(not f.is_final_frame for f in msg[:-1]):
-            return msg
-        else:
-            return None
-
-
 class EtherIO(object):
 
     def __init__(self):
@@ -157,22 +143,42 @@ class EtherIO(object):
         frame = EtherFrame(pkt, sa_ll, time.time())
         if frame.checksum != frame.sbox_checksum():
             return
-        if frame.is_multi_frame:
-            msg = frame.try_reassembly(self.frames)
-        else:
-            msg = frame
+        msg = self._reassemble(frame) if frame.is_multi_frame else frame
         if msg is not None:
             self.q.put_nowait(msg)
 
-    def _gc_frames(self):
-        threshold = time.time() - fragment_gc_seconds
+    def _filter_frames(self, func):
+        # This may be premature optimization, but the intent is a more efficient
+        # implementation of:
+        #
+        #   self.frames[:] = [f for i, f in enumerate(self.frames) if func(f, i)]
+        #
         i, n = 0, len(self.frames)
         while i < n:
-            if self.frame[i].timestamp < threshold:
-                del self.frame[i]
-                n -= 1
-            else:
+            if func(self.frames[i], i):
                 i += 1
+            else:
+                del self.frames[i]
+                n -= 1
+
+    def _gc_frames(self):
+        threshold = time.time() - fragment_gc_seconds
+        self._filter_frames(lambda f, i: f.timestamp >= threshold)
+
+    def _reassemble(self, frame):
+        # Allow duplication and reordering, disallow other inconsistencies
+        self.frames.append(frame)
+        self.frames.sort(key = lambda f: (f.pdu_number, -f.timestamp))
+        self._filter_frames(lambda f, i: f.pdu_number >= i)
+        if not self.frames[-1].is_final_frame:
+            return None
+        if any(f.is_final_frame for f in msg[:-1]):
+            return None
+        if any(f.pdu_number != i for i, f in enumerate(self.frames)):
+            return None
+        msg = "".join(self.frames)
+        del self.frames[:] 
+        return msg
 
     @tornado.gen.coroutine
     def read(self):
