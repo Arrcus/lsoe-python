@@ -157,7 +157,7 @@ class EtherIO(object):
         if not self.frames[-1].is_final_frame:
             return None
         self.frames[:] = [f for i, f in enumerate(self.frames) if f.pdu_number >= i]
-        if any(f.is_final_frame for f in msg[:-1]) or \
+        if any(f.is_final_frame or f.type != self.frames[-1].type for f in self.frames[:-1]) or \
            any(f.pdu_number != i for i, f in enumerate(self.frames)):
             return None
         msg = b"".join(self.frames)
