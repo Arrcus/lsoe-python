@@ -71,3 +71,26 @@ or ....
 In -02 the frames within a message do have sequence numbers.  Messages
 do not have sequence numbers in -02, protocol pretty much assumes
 lock-step for everything where that might matter.
+
+At this point I may have sold Randy on separating the transport
+framing from the application message.  What I'm looking for is very
+UDP-like, except that I also want the fragmentation mangement at this
+layer.  So basically a combination of IPv4 fragments and UDP.  Payload
+inside this transport layer is just bytes as far as the transport is
+concerned; application messages look very BGP-like.
+
+For some reason I'm thinking of NETBLT and VMTP, but probably way over
+the top.
+
+Possible transport header:
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |    Version    |L| PDU Number  |           PDU Length          |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                            Checksum                           |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+Where L flags that this is the last PDU (frame) in a message.  So a
+single-frame message would have L = 1, PDU Number = 0.

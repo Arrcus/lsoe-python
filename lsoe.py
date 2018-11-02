@@ -44,22 +44,19 @@ ETH_P_LSOE = ETH_P_IEEE_EXP1
 SockAddrLL = collections.namedtuple("Sockaddr_LL",
                                     ("ifname", "protocol", "pkttype", "arptype", "macaddr"))
 
-# May end up moving header formats into classes, sort that out as we
-# go.  May also end up wrapping some syntactic sugar around all these
-# enums and format codes and ....
+# May end up moving header formats into classes, using the
+# struct.Struct class, etc, sort that out as we go.  May also end up
+# wrapping some syntactic sugar around all these enums and format
+# codes and ....
 
-# 5.2.1. Frame TLV
-frame_header_format = "!BBHLBB"
+frame_header_format    = "!BBHL"
+FRAME_HEADER_LAST_FRAG = 0x80
 
 # 5.2.1: Type codes
 for i, n in enumerate(("HELLO", "OPEN","KEEPALIVE", "ENCAPSULATION_ACK",
                        "IPV4_ANNOUNCEMENT", "IPV6_ANNOUNCEMENT",
                        "MPLS_IPV4_ANNOUNCEMENT", "MPLS_IPV6_ANNOUNCEMENT")):
     globals()["LSOE_" + n] = i
-
-# 5.2.1: Flags
-LSOE_IS_MULTI_FRAME = 1 << 0
-LSOE_IS_FINAL_FRAME = 1 << 1
 
 class EtherFrame(object):
 
@@ -97,16 +94,20 @@ class EtherFrame(object):
             self.unpack_header()
 
     def unpack_header(self):
-        (self.version,  self.type, self.pdu_length, self.checksum, self.pdu_number, self.flags
+        (self.version,  self.frag, self.length, self.checksum
         ) = struct.unpack(frame_header_format, self.bytes)
 
     @property
     def is_multi_frame(self):
-        return self.flags & LSOE_IS_MULTI_FRAME != 0
+        return self.frag != FRAME_HEADER_LAST_FRAG
 
     @property
     def is_final_frame(self):
-        return self.flags & LSOE_IS_FINAL_FRAME != 0
+        return self.frag & FRAME_HEADER_LAST_FRAG != 0
+
+    @property
+    def frame_number(self):
+        return self.frag & ~FRAME_HEADER_LAST_FRAG
 
     def sbox_checksum(self):
         hdr = struct.pack(frame_header_format, self.version,  self.type,
@@ -120,6 +121,11 @@ class EtherFrame(object):
         for i in xrange(2):
             result = (result >> 32) + (result & 0xFFFFFFFF)
         return result
+
+    @property
+    def payload(self):
+        return self.bytes[struct.calcsize(frame_header_format) :
+                          struct.calcsize(frame_header_format) + self.length]
 
 class EtherIO(object):
 
@@ -140,7 +146,7 @@ class EtherIO(object):
         frame = EtherFrame(pkt, sa_ll, time.time())
         if frame.checksum != frame.sbox_checksum():
             return
-        msg = self._reassemble(frame) if frame.is_multi_frame else frame
+        msg = self._reassemble(frame)
         if msg is not None:
             self.q.put_nowait(msg)
 
@@ -151,16 +157,19 @@ class EtherIO(object):
             del self.frames[0]
 
     def _reassemble(self, frame):
+        if not frame.is_multi_frame:
+            del self.frames[:]
+            return frame.payload
         # Allow duplication and reordering, disallow other inconsistencies
         self.frames.append(frame)
-        self.frames.sort(key = lambda f: (f.pdu_number, -f.timestamp))
+        self.frames.sort(key = lambda f: (f.frame_number, -f.timestamp))
         if not self.frames[-1].is_final_frame:
             return None
-        self.frames[:] = [f for i, f in enumerate(self.frames) if f.pdu_number >= i]
+        self.frames[:] = [f for i, f in enumerate(self.frames) if f.frame_number >= i]
         if any(f.is_final_frame or f.type != self.frames[-1].type for f in self.frames[:-1]) or \
-           any(f.pdu_number != i for i, f in enumerate(self.frames)):
+           any(f.frame_number != i for i, f in enumerate(self.frames)):
             return None
-        msg = b"".join(self.frames)
+        msg = b"".join(f.payload for f in self.frames)
         del self.frames[:] 
         return msg
 
