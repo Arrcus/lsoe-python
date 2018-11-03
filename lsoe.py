@@ -182,6 +182,18 @@ class Datagram(object):
             length    = length,
             checksum  = cksum)
 
+    @classmethod
+    def split_message(cls, bytes, macaddr):
+        sa_ll = SockAddrLL(macaddr  = macaddr,
+                           ifname   = MACAddrDB.get(macaddr),
+                           protocol = ETH_P_LSOE,
+                           pkttype  = 0,
+                           arptype  = 0)
+        n = ETH_DATA_LEN - cls.header.size
+        chunks = [bytes[i : i + n] for i in xrange(0, bytes, n)]
+        for i, chunk in enumerate(chunks):
+            yield cls.outgoing(chunk, sa_ll, i, chunk is chunks[-1])
+
     @property
     def is_final(self):
         return self.frag & self.LAST_FLAG != 0
@@ -206,56 +218,34 @@ class Datagram(object):
     def payload(self):
         return self.bytes[self.header.size : self.header.size + self.length]
 
-class Message(object):
-
-    def __init__(self, macaddr, bytes = None, dgrams = None):
-        self.macaddr = macaddr
-        self.dgrams = dgrams
-        self.bytes = bytes
-
-    @classmethod
-    def incoming(self, dgrams):
-        assert all(d.sa_ll.macaddr == dgrams[0].sa_ll.macaddr for d in dgrams)
-        assert all(d.sa_ll.ifname  == dgrams[0].sa_ll.ifname  for d in dgrams)
-        return cls(
-            macaddr = dgrams[0].sa_ll.macaddr,
-            dgrams  = dgrams,
-            bytes   = b"".join(d.payload for d in dgrams))
-
-    def split_into_dgrams(self):
-        sa_ll = SockAddrLL(macaddr  = self.macaddr,
-                           ifname   = MACAddrDB.get(self.macaddr),
-                           protocol = ETH_P_LSOE,
-                           pkttype  = 0,
-                           arptype  = 0)
-        self.dgrams = []
-        n = ETH_DATA_LEN - Datagram.header.size
-        for i in xrange(0, len(self.bytes), n):
-            bytes = self.bytes[i : i + n]
-            self.dgrams.append(Datagram.outgoing(bytes, sa_ll, i / n, i + n >= len(self.bytes)))
-        return self.dgrams
-
 class EtherIO(object):
 
     def __init__(self):
+        # Do we need to do anything with multicast setup?
         self.dgrams = {}
         self.q = tornado.queues.Queue()
         self.s = socket.socket(socket.PF_PACKET, socket.SOCK_DGRAM, socket.htons(ETH_P_LSOE))
-        # Do we need to do anything with multicast setup here?
         self.ioloop = tornado.ioloop.IOLoop.current()
         self.ioloop.add_handler(self.s, self._handle_read,  tornado.ioloop.READ)
         self.ioloop.add_handler(self.s, self._handle_error, tornado.ioloop.ERROR)
-        # .PeriodicCallback() wants milliseconds, not seconds, so multiplying
-        # by 500 gets two GC calls per timeout interval.
         self.ioloop.PeriodicCallback(self._gc, lsoe_msg_reassembly_timeout * 500)
         # Probably need one or more self.ioloop.spawn_callback() calls here
 
-    def _handle_read(self, events):
-        # Allow duplication and reordering, disallow other
-        # inconsistencies.  We do, however, need to support receiving
-        # from multiple MAC addresses in parallel, so each peer
-        # address gets its own reassembly queue and GC has to deal.
+    # Returns a Future, awaiting which returns a (bytes, macaddr) tuple
+    def read(self):
+        return self.q.get()
 
+    # Breaks bytes into datagrams and sends them
+    def write(self, bytes, macaddr):
+        for d in Datagram.split_message(bytes, macaddr):
+            self.s.sendto(d.bytes, d.sa_ll)
+
+    # Tears down I/O
+    def close(self):
+        self.ioloop.remove_handler(self.s)
+
+    # Internal handler for READ events
+    def _handle_read(self, events):
         pkt, sa_ll = s.recvfrom(ETH_DATA_LEN)
         if len(pkt) < Datagram.header.size:
             return
@@ -283,8 +273,9 @@ class EtherIO(object):
             if d.dgram_number != i or d.is_final != (d is rq[-1]):
                 return
         del self.dgrams[sa_ll.macaddr]
-        self.q.put_nowait(Message(rq))
+        self.q.put_nowait((b"".join(d.payload for d in rq), sa_ll.macaddr))
 
+    # Internal handler to garbage collect incomplete messages
     def _gc(self):
         threshold = time.time() - lsoe_msg_reassembly_timeout
         for macaddr, rq in self.dgrams.iteritems():
@@ -293,16 +284,3 @@ class EtherIO(object):
                 del rq[0]
             if not rq:
                 del self.dgrams[macaddr]
-
-    @tornado.gen.coroutine
-    def read(self):
-        msg = yield self.q.get()
-        return msg
-
-    @tornado.gen.coroutine
-    def write(self, msg):
-        for d in msg.split_into_dgrams():
-            self.s.sendto(d.bytes, d.sa_ll)
-
-    def close(self):
-        self.ioloop.remove_handler(self.s)
