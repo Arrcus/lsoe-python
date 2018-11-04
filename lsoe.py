@@ -29,6 +29,10 @@ import tornado.locks
 import tornado.ioloop
 import tornado.queues
 
+# This is LSOE protocol version zero
+
+LSOE_VERSION = 0
+
 # Ethernet physical layer contstants from linux/if_ether.h, with additions.
 
 ETH_DATA_LEN    = 1500          # Max. octets in payload
@@ -54,18 +58,14 @@ PACKET_OUTGOING	 = 4
 SockAddrLL = collections.namedtuple("Sockaddr_LL",
                                     ("ifname", "protocol", "pkttype", "arptype", "macaddr"))
 
-LSOE_VERSION = 0
-
-# 5.2.1: Type codes
-for i, n in enumerate(("HELLO", "OPEN","KEEPALIVE", "ENCAPSULATION_ACK",
-                       "IPV4_ANNOUNCEMENT", "IPV6_ANNOUNCEMENT",
-                       "MPLS_IPV4_ANNOUNCEMENT", "MPLS_IPV6_ANNOUNCEMENT")):
-    globals()["LSOE_" + n] = i
-
 # Magic parameters which ought to come from a configuration file
 
 lsoe_msg_reassembly_timeout = 1 # seconds
 lsoe_macaddrdb_timeout = 300    # Seconds, number pulled out of a hat
+
+#
+# Transport layer
+#
 
 class MACAddrDB(object):
     """
@@ -302,3 +302,195 @@ class EtherIO(object):
                 del rq[0]
             if not rq:
                 del self.dgrams[macaddr]
+
+#
+# Application layer
+#
+
+def register_pdu(cls):
+    """
+    Decorator to add a PDU class to the PDU dispatch table.
+    """
+
+    assert cls.pdu_type not in cls.pdu_dispatch
+    cls.pdu_dispatch[cls.pdu_type] = cls
+
+class PDUParseError(Exception):
+    "Error parsing LSOE PDU."
+
+# Not sure whether we want to be passing macaddr to .from_wire(), this
+# is just PDU parsing, received macaddr is connection/session.  Omit for now.
+
+class PDU(object):
+    """
+    Abstract base class for PDUs.
+    """
+
+    pdu_type = None
+    pdu_dispatch = {}
+
+    h = struct.Struct("!BH")
+
+    def __cmp__(self, other):
+        return cmp(self.to_wire(), other.to_wire())
+
+    @classmethod
+    def from_wire(cls, bytes):
+        pdu_type, pdu_length = cls.h.unpack(bytes)
+        self = cls.pdu_dispatch[pdu_type]()
+        if len(bytes) != pdu_length:
+            raise PDUParseError
+        self.pdu_length = pdu_length
+        self.from_wire(bytes[cls.h.size:])
+        return self
+
+    def to_wire(self, bytes):
+        return self.h.pack(self.pdu_type, self.h.size + len(bytes)) + bytes
+
+
+@register_pdu
+class HelloPDU(PDU):
+
+    pdu_type = 0
+
+    h = struct.Struct("6s")
+
+    def from_wire(self, bytes):
+        self.my_macaddr, = self.h.unpack(bytes)
+
+    def to_wire(self):
+        return super(HelloPDU, self).to_wire(self.h.pack(self.my_macaddr))
+    
+@register_pdu
+class OpenPDU(PDU):
+
+    # Implementation restriction: For now, we assume and require Authentiation Data to be empty.
+
+    pdu_type = 2
+
+    h = struct.Struct("10s10spH")
+
+    def from_wire(self, bytes):
+        self.local_id, self.remote_id, self.attributes, self.auth_length = self.h.unpack(bytes)
+        if self.auth_length != 0:
+            raise PDUParserError
+
+    def to_wire(self):
+        return super(OpenPDU, self).to_wire(self.h.pack(
+            self.local_id, self.remote_id, self.attributes, 0))
+
+class PrimLoopFlagsMixin(object):
+
+    _primary_flag  = 0x80
+    _loopback_flag = 0x40
+    flags = 0
+
+    @property
+    def primary(self):
+        return self.flags & self._primary_flag != 0
+
+    @primary.setter
+    def primary(self, newval):
+        if newval:
+            self.flags |= self._primary_flag
+        else:
+            self.flags &= ~self._primary_flag
+
+    @property
+    def loopback(self):
+        return self.flags & self._loopback_flag != 0
+
+    @loopback.setter
+    def loopback(self, newval):
+        if newval:
+            self.flags |= self._loopback_flag
+        else:
+            self.flags &= ~self._loopback_flag
+
+class IPEncapsulation(PrimLoopFlagsMixin):
+
+    @classmethod
+    def from_wire(cls, bytes, offset):
+        self = cls()
+        self.flags, self.ipaddr, self.prefixlen = self.h.unpack_from(bytes, offset)
+        return self, self.h.size
+
+    def to_wire(self):
+        return self.h.pack(self.flags, self.ipaddr, self.prefixlen)
+
+# Pretend for now that we can treat an MPLS label as an opaque
+# three-octet string rather than needing get/set properties.
+
+class MPLSIPEncapsulation(PrimLoopFlagsMixin):
+
+    h1 = struct.Struct("BB")
+    h2 = struct.Struct("3s")
+
+    @classmethod
+    def from_wire(cls, bytes, offset):
+        self = cls()
+        self.flags, label_count = self.h1.unpack_from(bytes, offset)
+        self.labels = []
+        offset += self.h1.size
+        for i in xrange(label_count):
+            labels.append(self.h2.unpack_from(bytes, offset)[0])
+            offset += self.h2.size
+        self.ipaddr, self.prefixlen = self.h3.unpack_from(bytes, offset)
+        return self, self.h1.size + self.h2.size * len(self.labels) + self.h3.size
+
+    def to_wire(self):
+        return self.h1.pack(self.flags, len(labels)) \
+            + b"".join(self.h2.pack(l) for l in self.labels) \
+            + self.h13.pack(self.ipaddr, self.prefixlen)
+
+class EncapsulationPDU(PDU):
+
+    h = struct.Struct("H")
+
+    encap_type = None
+
+    def from_wire(self, bytes):
+        count, = self.h.unpack(bytes)
+        offset = self.h.size
+        self.encaps = []
+        for i in xrange(count):
+            e, n = self.encap_type.from_wire(bytes, offset)
+            encaps.append(e)
+            offset += n
+
+    def to_wire(self):
+        return super(EncapsulationPDU, self).to_wire(
+            self.h.pack(len(self.encaps)) +
+            b"".join(e.to_wire() for e in self.encaps))
+
+class IPv4Encapsulation(IPEncapsulation):
+    h = struct.Struct("B4sB")
+
+class IPv6Encapsulation(IPEncapsulation):
+    h = struct.Struct("B16sB")
+
+class MPLSIPv4Encapsulation(MPLSIPEncapsulation):
+    h3 = struct.Struct("4sB")
+
+class MPLSIPv6Encapsulation(MPLSIPEncapsulation):
+    h3 = struct.Struct("16sB")
+
+@register_pdu
+class IPv4EncapsulationPDU(PDU):
+    pdu_type = 4
+    encap_type = IPv4Encapsulation
+
+@register_pdu
+class IPv6EncapsulationPDU(PDU):
+    pdu_type = 5
+    encap_type = IPv6Encapsulation
+
+@register_pdu
+class MPLSIPv4EncapsulationPDU(PDU):
+    pdu_type = 6
+    encap_type = MPLSIPv4Encapsulation
+
+@register_pdu
+class MPLSIPv6EncapsulationPDU(PDU):
+    pdu_type = 7
+    encap_type = MPLSIPv6Encapsulation
