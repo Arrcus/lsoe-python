@@ -68,9 +68,16 @@ lsoe_msg_reassembly_timeout = 1 # seconds
 lsoe_macaddrdb_timeout = 300    # Seconds, number pulled out of a hat
 
 class MACAddrDB(object):
+    """
+    MAC address interface database: maps MAC addresses to interface
+    names, with some error checking because we really should not see
+    the same MAC address on different interfaces within the KEEPALIVE
+    window (yes, sadly, vendors do sometimes ship an entire pallet of
+    switches with the same MAC address).
 
-    # MAC address interface database.  Don't touch instances directly,
-    # use the class methods to act on the database as a whole.
+    Don't touch instances of this class directly, use the class
+    methods to act on the database as a whole.
+    """
 
     _db = {}
 
@@ -111,8 +118,11 @@ class MACAddrDB(object):
                 cls.remove(macaddr)
 
 class Datagram(object):
+    """
+    LSOE transport protocol datagram.
+    """
 
-    header     = struct.Struct("!BBHL")
+    h = struct.Struct("!BBHL")
     LAST_FLAG  = 0x80
 
     _sbox = (0xa3,0xd7,0x09,0x83,0xf8,0x48,0xf6,0xf4,0xb3,0x21,0x15,0x78,
@@ -149,7 +159,7 @@ class Datagram(object):
 
     @classmethod
     def incoming(cls, bytes, sa_ll):
-        version, frag, length, checksum = cls.header.unpack(bytes)
+        version, frag, length, checksum = cls.h.unpack(bytes)
         if length > len(bytes):
             bytes = bytes[:length]
         return cls(
@@ -165,15 +175,15 @@ class Datagram(object):
         return self.version == LSOE_VERSION and \
             len(self.bytes) == self.length and \
             self.checksum == self._sbox_checksum(
-                self.bytes[self.header.size:], self.frag, self.length)
+                self.bytes[self.h.size:], self.frag, self.length)
 
     @classmethod
     def outgoing(cls, bytes, sa_ll, frag, last):
         if last:
             frag |= Datagram.LAST_FLAG
-        length = cls.header.size + len(bytes)
+        length = cls.h.size + len(bytes)
         cksum  = cls._sbox_checksum(bytes, frag, length)
-        hdr    = cls.header.pack(LSOE_VERSION, frag, length, cksum)
+        hdr    = cls.h.pack(LSOE_VERSION, frag, length, cksum)
         return cls(
             bytes     = hdr + bytes,
             sa_ll     = sa_ll,
@@ -189,7 +199,7 @@ class Datagram(object):
                            protocol = ETH_P_LSOE,
                            pkttype  = 0,
                            arptype  = 0)
-        n = ETH_DATA_LEN - cls.header.size
+        n = ETH_DATA_LEN - cls.h.size
         chunks = [bytes[i : i + n] for i in xrange(0, bytes, n)]
         for i, chunk in enumerate(chunks):
             yield cls.outgoing(chunk, sa_ll, i, chunk is chunks[-1])
@@ -203,8 +213,8 @@ class Datagram(object):
         return self.frag & ~self.LAST_FLAG
 
     @classmethod
-    def _sbox_checksum(cls, bytes, frag, length):
-        pkt = cls.header.pack(LSOE_VERSION, frag, length, 0) + bytes
+    def _sbox_checksum(cls, bytes, frag, length, version = LSOE_VERSION):
+        pkt = cls.h.pack(version, frag, length, 0) + bytes
         sum, result = [0, 0, 0, 0], 0
         for i, b in enumerate(pkt):
             sum[i & 3] += self._sbox[b]
@@ -216,9 +226,17 @@ class Datagram(object):
 
     @property
     def payload(self):
-        return self.bytes[self.header.size : self.header.size + self.length]
+        return self.bytes[self.h.size : self.h.size + self.length]
 
 class EtherIO(object):
+    """
+    LSOE transport protocol implementation.  Uses Tornado to read and
+    write from a PF_PACKET datagram socket.  Handles fragmentation,
+    reassembly, checksum, and transport layer sanity checks.
+
+    User interface to upper layer is the .read(), .write(), and
+    .close() methods, everything else is internal to the engine.
+    """
 
     def __init__(self):
         # Do we need to do anything with multicast setup?
@@ -247,7 +265,7 @@ class EtherIO(object):
     # Internal handler for READ events
     def _handle_read(self, events):
         pkt, sa_ll = s.recvfrom(ETH_DATA_LEN)
-        if len(pkt) < Datagram.header.size:
+        if len(pkt) < Datagram.h.size:
             return
         sa_ll = SockAddrLL(*sa_ll)
         assert sa_ll.protocol == ETH_P_LSOE
@@ -278,7 +296,7 @@ class EtherIO(object):
     # Internal handler to garbage collect incomplete messages
     def _gc(self):
         threshold = time.time() - lsoe_msg_reassembly_timeout
-        for macaddr, rq in self.dgrams.iteritems():
+        for macaddr, rq in self.dgrams.items():
             rq.sort(key = lambda d: d.timestamp)
             while rq[0].timestamp < threshold:
                 del rq[0]
