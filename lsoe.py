@@ -494,3 +494,27 @@ class MPLSIPv4EncapsulationPDU(PDU):
 class MPLSIPv6EncapsulationPDU(PDU):
     pdu_type = 7
     encap_type = MPLSIPv6Encapsulation
+
+@register_pdu
+class EncapsulationACKPDU(PDU):
+
+    pdu_type = 3
+
+    h = struct.Struct("B")
+
+    def from_wire(self, bytes):
+        self.encap_type, = self.h.unpack(bytes)
+
+    def to_wire(self):
+        return super(EncapsulationACKPDU, self).to_wire(self.h.pack(self.encap_type))
+
+@register_pdu
+class KeepAlivePDU(PDU):
+
+    pdu_type = 2
+
+    def from_wire(self, bytes):
+        pass
+
+    def to_wire(self):
+        return super(KeepAlivePDU, self).to_wire("")
