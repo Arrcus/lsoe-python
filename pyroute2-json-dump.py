@@ -7,7 +7,6 @@ from sys import stdout
 from json import dump
 
 with IPRoute() as ipr:
-    for x in ipr.get_links():
-        print(x.get_attr("IFLA_IFNAME"),
-              x.get_attr("IFLA_ADDRESS"),
-              x.get_attr("IFLA_BROADCAST"))
+    dump(dict(links = ipr.get_links(),
+              addrs = ipr.get_addr()),
+         stdout, indent = 4, sort_keys = True)
