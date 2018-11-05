@@ -107,3 +107,25 @@ decorator, which sort of makes sense, so decorator ordering would be:
 	def foo(cls, fee, fie, foe, fum):
 	    yield do_something_interesting()
 ```
+
+So it looks like we really do need to use pyroute2, not just because
+screen scraping output from `ip addr list` is nasty, but because we
+need to receive notifications when interfaces go up / down / south.
+
+Using pyroute2 to list interfaces is pretty easy, although there's
+this annoying split between listing interfaces and listing addresses,
+one may have to do both to get useful associations between interface
+names and addresses at layers 2 and three.
+
+The fun part, though, is how one does the `RTNLGRP_LINK` monitoring to
+receive events.  Nothing obvious in pyroute2 code proper, but there's
+an example in `pyroute2.config.test_platform.TestCapsRtnl.monitor()`.
+Looks like one can bind a `RawIPRoute()` to `RTNLGRP_LINK`, treat the
+`RawIPRoute` object as a socket, then call its `.get()` method on
+wakeup to pull messages.  At least, the test code implies that it
+works with `poll()`, maybe it'll work with Tornado too.
+
+But of course then we need to figure out which tiny fraction of these
+messages we actually want.  Maybe pyroute2 makes this easier than
+libnl did?  We'll see.  Probably start with an event dumper and go
+from there.
