@@ -7,7 +7,6 @@ import pyroute2.netlink.rtnl
 import tornado.ioloop
 
 def handle_read(*args, **kwargs):
-    print("args: {!r}, kwargs {!r}".format(args, kwargs))
     json.dump(ip.get(), sys.stdout, indent = 4, sort_keys = True)
     sys.stdout.flush()
 
