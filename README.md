@@ -94,3 +94,16 @@ Possible transport header:
 
 Where L flags that this is the last PDU (frame) in a message.  So a
 single-frame message would have L = 1, PDU Number = 0.
+
+Decorator ordering:
+https://stackoverflow.com/questions/37119652/python-tornado-call-to-classmethod#37127703
+says that `@classmethod` (or `@staticmethod`) must be the outermost
+decorator, which sort of makes sense, so decorator ordering would be:
+
+```python
+
+    @classmethod
+	@tornado.gen.coroutine
+	def foo(cls, fee, fie, foe, fum):
+	    yield do_something_interesting()
+```

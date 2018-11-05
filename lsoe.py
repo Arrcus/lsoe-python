@@ -366,7 +366,7 @@ class OpenPDU(PDU):
 
     # Implementation restriction: For now, we assume and require Authentiation Data to be empty.
 
-    pdu_type = 2
+    pdu_type = 1
 
     h = struct.Struct("10s10spH")
 
