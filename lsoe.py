@@ -63,63 +63,12 @@ SockAddrLL = collections.namedtuple("Sockaddr_LL",
                                     ("ifname", "protocol", "pkttype", "arptype", "macaddr"))
 
 # Magic parameters which ought to come from a configuration file
-
-lsoe_msg_reassembly_timeout = 1 # seconds
-lsoe_macaddrdb_timeout = 300    # Seconds, number pulled out of a hat
+lsoe_msg_reassembly_timeout = 1   # seconds
+lsoe_macaddr_cache_timeout  = 300 # Seconds, number pulled out of a hat
 
 #
 # Transport layer
 #
-
-class MACAddrDB(object):
-    """
-    MAC address interface database: maps MAC addresses to interface
-    names, with some error checking because we really should not see
-    the same MAC address on different interfaces within the KEEPALIVE
-    window (yes, sadly, vendors do sometimes ship an entire pallet of
-    switches with the same MAC address).
-
-    Don't touch instances of this class directly, use the class
-    methods to act on the database as a whole.
-    """
-
-    _db = {}
-
-    def __init__(self, macaddr, ifname):
-        self.macaddr = macaddr
-        self.ifname = ifname
-
-    @classmethod
-    def ok(cls, macaddr, ifname):
-        try:
-            return cls._db.get[macaddr].ifname == ifname
-        except KeyError:
-            return True
-
-    @classmethod
-    def get(cls, macaddr):
-        return cls._db[macaddr].ifname
-
-    @classmethod
-    def update(cls, macaddr, ifname):
-        try:
-            self = cls._db[macaddr]
-        except KeyError:
-            self = cls._db[macaddr] = cls(macaddr, ifname)
-        self.timestamp = time.time()    
-
-    @classmethod
-    def remove(cls, macaddr):
-        del cls._db[macaddr]
-
-    # Invocation cycle of this function should be tied to KEEPALIVE
-    # timeout configuration, as of course should entry timeout itself.
-    @classmethod
-    def gc(cls):
-        threshold = time.time() - lsoe_macaddrdb_timeout
-        for macaddr in cls._db.keys():
-            if cls._db[macaddr].timestamp < threshold:
-                cls.remove(macaddr)
 
 class Datagram(object):
     """
@@ -197,9 +146,9 @@ class Datagram(object):
             checksum  = cksum)
 
     @classmethod
-    def split_message(cls, bytes, macaddr):
+    def split_message(cls, bytes, macaddr, ifname):
         sa_ll = SockAddrLL(macaddr  = macaddr,
-                           ifname   = MACAddrDB.get(macaddr),
+                           ifname   = ifname,
                            protocol = ETH_P_LSOE,
                            pkttype  = 0,
                            arptype  = 0)
@@ -242,8 +191,15 @@ class EtherIO(object):
     .close() methods, everything else is internal to the engine.
     """
 
+    class MACAddr(object):
+        def __init__(self, macaddr, ifname):
+            self.macaddr = macaddr
+            self.ifname = ifname
+            self.timestamp = None
+
     def __init__(self):
         # Do we need to do anything with multicast setup?
+        self.macaddrs = {}
         self.dgrams = {}
         self.q = tornado.queues.Queue()
         self.s = socket.socket(socket.PF_PACKET, socket.SOCK_DGRAM, socket.htons(ETH_P_LSOE))
@@ -259,7 +215,7 @@ class EtherIO(object):
 
     # Breaks bytes into datagrams and sends them
     def write(self, bytes, macaddr):
-        for d in Datagram.split_message(bytes, macaddr):
+        for d in Datagram.split_message(bytes, macaddr, self.macaddrs[macaddr].ifname):
             self.s.sendto(d.bytes, d.sa_ll)
 
     # Tears down I/O
@@ -275,10 +231,12 @@ class EtherIO(object):
         assert sa_ll.protocol == ETH_P_LSOE
         if sa_ll.pkttype = PACKET_OUTGOING:
             return
-        if not MACAddrDB.ok(sa_ll.macaddr, sa_ll.ifname):
+        if sa_ll.macaddr not in self.macaddrs:
+            self.macaddrs[macaddr] = self.MACAddr(sa_ll.macaddr, sa_ll.ifname)
+        elif self.macaddrs[macaddr].ifname != sa_ll.ifname:
             # Should yell about MAC address appearing on wrong interface here
             return
-        MACAddrDB.update(sa_ll.macaddr, sa_ll.ifname)
+        self.macaddrs[sa_ll.macaddr].timestamp = time.time()
         d = Datagram.incoming(pkt, sa_ll)
         if not d.verify():
             return
@@ -297,7 +255,7 @@ class EtherIO(object):
         del self.dgrams[sa_ll.macaddr]
         self.q.put_nowait((b"".join(d.payload for d in rq), sa_ll.macaddr))
 
-    # Internal handler to garbage collect incomplete messages
+    # Internal handler to garbage collect incomplete messages and stale MAC addresses
     def _gc(self):
         threshold = time.time() - lsoe_msg_reassembly_timeout
         for macaddr, rq in self.dgrams.items():
@@ -306,6 +264,10 @@ class EtherIO(object):
                 del rq[0]
             if not rq:
                 del self.dgrams[macaddr]
+        threshold = time.time() - lsoe_macaddr_cache_timeout
+        for macaddr, m in self.macaddrs.items():
+            if m.timestamp < threshold:
+                del self.macaddrs[macaddr]
 
 #
 # Application layer
