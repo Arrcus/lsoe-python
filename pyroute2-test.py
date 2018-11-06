@@ -34,6 +34,11 @@ class Interface(object):
         if family not in self.ipaddrs:
             self.ipaddrs[family] = []
         self.ipaddrs[family].append(ipaddr)
+        print("Interface {} add {}".format(self.name, ipaddr))
+
+    def del_ipaddr(self, family, ipaddr):
+        self.ipaddrs[family].remove(ipaddr)
+        print("Interface {} del {}".format(self.name, ipaddr))
 
     @property
     def flagtext(self):
@@ -56,7 +61,9 @@ class Interface(object):
 # Unlikely to matter in toy demo but on busy switch it might
 
 ip = pyroute2.RawIPRoute()
-ip.bind(pyroute2.netlink.rtnl.RTNLGRP_LINK)
+ip.bind(pyroute2.netlink.rtnl.RTNLGRP_LINK|
+        pyroute2.netlink.rtnl.RTNLGRP_IPV4_IFADDR|
+        pyroute2.netlink.rtnl.RTNLGRP_IPV4_IFADDR)
 
 ifnames = {}
 ifindex = {}
@@ -81,7 +88,14 @@ for i in sorted(ifindex):
 
 def handle_event(*ignored):
     for msg in ip.get():
-        ifindex[msg["index"]].update_flags(msg["flags"])
+        if msg["event"] == "RTM_NEWLINK":
+            ifindex[msg["index"]].update_flags(msg["flags"])
+        elif msg["event"] == "RTM_NEWADDR":
+            ifindex[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+        elif msg["event"] == "RTM_DELADDR":
+            ifindex[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+        else:
+            print("WTF: {} event".format(msg["event"]))
 
 ioloop = tornado.ioloop.IOLoop.current()
 ioloop.add_handler(ip.fileno(), handle_event, tornado.ioloop.IOLoop.READ)

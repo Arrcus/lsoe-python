@@ -29,6 +29,10 @@ import tornado.locks
 import tornado.ioloop
 import tornado.queues
 
+import pyroute2
+import pyroute2.netlink.rtnl
+import pyroute2.netlink.rtnl.ifinfmsg
+
 # This is LSOE protocol version zero
 
 LSOE_VERSION = 0
@@ -518,3 +522,69 @@ class KeepAlivePDU(PDU):
 
     def to_wire(self):
         return super(KeepAlivePDU, self).to_wire("")
+
+#
+# Network interface status and monitoring.
+#
+
+class Interface(object):
+
+    def __init__(self, index, name, macaddr, flags):
+        self.index   = index
+        self.name    = name
+        self.macaddr = macaddr
+        self.flags   = flags
+        self.ipaddrs = {}
+
+    def add_ipaddr(self, family, ipaddr):
+        if family not in self.ipaddrs:
+            self.ipaddrs[family] = []
+        self.ipaddrs[family].append(ipaddr)
+
+    def del_ipaddr(self, family, ipaddr):
+        self.ipaddrs[family].remove(ipaddr)
+
+    def update_flags(self, flags):
+        self.flags = flags
+
+    @property
+    def is_up(self):
+        # Add other flags as needed, eg, IFF_LOWER_UP
+        return self.flags & pyroute2.netlink.rtnl.ifinfmsg.IFF_UP != 0
+
+class Interfaces(object):
+    
+    def __init__(self):
+        # Race condition: open event monitor socket before doing initial scans.
+        self.ip = pyroute2.RawIPRoute()
+        self.ip.bind(pyroute2.netlink.rtnl.RTNLGRP_LINK|
+                     pyroute2.netlink.rtnl.RTNLGRP_IPV4_IFADDR|
+                     pyroute2.netlink.rtnl.RTNLGRP_IPV4_IFADDR)
+        self.ifnames = {}
+        self.ifindex = {}
+        with pyroute2.IPRoute() as ipr:
+            for msg in ipr.get_links():
+                iface = Interface(
+                    index   = msg["index"],
+                    flags   = msg["flags"],
+                    name    = msg.get_attr("IFLA_IFNAME"),
+                    macaddr = msg.get_attr("IFLA_ADDRESS"))
+                self.ifindex[iface.index] = iface
+                self.ifnames[iface.name]  = iface
+            for msg in ipr.get_addr():
+                self.ifindex[msg["index"]].add_ipaddr(
+                    family = msg["family"],
+                    ipaddr = msg.get_attr("IFA_ADDRESS"))
+            tornado.ioloop.IOLoop.current().add_handler(
+                self.ip.fileno(), self._handle_event, tornado.ioloop.IOLoop.READ)
+
+        def _handle_event(self, *ignored):
+            for msg in ip.get():
+                if msg["event"] == "RTM_NEWLINK":
+                    ifindex[msg["index"]].update_flags(msg["flags"])
+                elif msg["event"] == "RTM_NEWADDR":
+                    ifindex[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+                elif msg["event"] == "RTM_DELADDR":
+                    ifindex[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+                else:
+                    print("WTF: {} event".format(msg["event"]))
