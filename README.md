@@ -168,3 +168,19 @@ Well, the base pyroute2 socket-ish objects we're using do support
 if only we knew what to do for `...` -- which looks like the same
 constants we're currently using in the bitmask, which suggests that
 this may be pointless.
+
+* * * 
+
+Current state and next steps
+----------------------------
+
+So we have:
+
+* Ethernet I/O code
+* Interface/address monitoring code
+* Presentation layer
+
+Still needed:
+
+* Protocol itself (state machine, ...)
+* Upwards API to BGP*
