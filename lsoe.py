@@ -550,3 +550,85 @@ class Interfaces(object):
                     ifindex[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
                 else:
                     print("WTF: {} event".format(msg["event"]))
+
+#
+# Protocol engine
+#
+
+# This is not even close to stable yet
+
+@tornado.gen.coroutine
+def main():
+
+    # Probably ought to be reading config file before doing anything else
+
+    sessions = {}
+    ifs = Interfaces()
+    io  = EtherIO()
+    while True:
+        msg, macaddr = yield io.read()
+        if macaddr not in sessions:
+            sessions[macaddr] = Session(io, ifs, macaddr)
+        sessions[macaddr].recv(msg)
+
+        # Need to do something (here or in a timer callback) to send
+        # HELLO on every interface, or maybe all configured
+        # interfaces, or intersection of configured and detected
+        # interfaces, or ... but in any case we need to send some.
+        #
+        # Might want to do that in a separate pseudo-thread.
+        #
+        # Might want main() to just initialise shared data structures
+        # and task pseudo-threads then wait them to exit.
+        #
+        # main() might want to be a class to simplify shared data.
+        #
+        # Need something here to gc dead sessions?
+
+class Session(object):
+
+    # Unclear what (if anything) needs to be a coroutine here.
+    # Depends on how much fun we want to have with dispatch mechanisms
+    # here vs pseudo threads vs ... for state.
+
+    def __init__(self, io, ifs, macaddr):
+        self.io = io
+        self.ifs = ifs
+        self.macaddr = macaddr
+        self.have_sent_open = False
+        self.have_seen_open = False
+
+    def recv(self, msg):
+        pdu = PDU.from_wire(msg)        
+
+        # If this is a new MAC address, the only allowed PDUs are
+        # Hello and Open.  I think current spec says each side sends
+        # the other an Open, so either we're sending an Open in
+        # response to a Hello or we're sending it in response to an
+        # Open.  Once we've sent an Open we have local state for the
+        # peer so simultaneous Opens should not be a problem.
+        #
+        # If this is not a new MAC address, we should already have
+        # local state for the peer.
+        # 
+        # Need to think about appropriate structure here.  Encode
+        # state machine as pseudo-thread state (dict of queues)?
+        # Explicit state machine data structure?  PDU dispatch
+        # methods?  Don't try to use all the toys in the box, question
+        # is which ones help.
+        #
+        # State machine is pretty simple:
+        #
+        # * Each side sends an OPEN
+        # * Each side acks the other side's open
+        # * Each side should send encaps
+        # * each side acks the other's encaps
+        # * After which point we're just doing keepalives forever
+        #
+        # May be able to encode state machine(s) as instance variables
+        # containing bound methods, eg:
+        #
+        #   self.next_state = self.blarg_state
+        #
+        # then we just dispatch to self.next_state() at the
+        # appropriate point, or something like that.
