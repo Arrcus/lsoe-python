@@ -66,6 +66,8 @@ SockAddrLL = collections.namedtuple("Sockaddr_LL",
 lsoe_msg_reassembly_timeout = 1   # seconds
 lsoe_macaddr_cache_timeout  = 300 # Seconds, number pulled out of a hat
 
+
+
 #
 # Transport layer
 #
@@ -269,84 +271,15 @@ class EtherIO(object):
             if m.timestamp < threshold:
                 del self.macaddrs[macaddr]
 
+
+
 #
 # Presentation layer
 #
 
-def register_pdu(cls):
-    """
-    Decorator to add a PDU class to the PDU dispatch table.
-    """
+# Encapsulations
 
-    assert cls.pdu_type is not None
-    assert cls.pdu_type not in cls.pdu_dispatch
-    cls.pdu_dispatch[cls.pdu_type] = cls
-
-class PDUParseError(Exception):
-    "Error parsing LSOE PDU."
-
-# Not sure whether we want to be passing macaddr to .from_wire(), this
-# is just PDU parsing, received macaddr is connection/session.  Omit for now.
-
-class PDU(object):
-    """
-    Abstract base class for PDUs.
-    """
-
-    pdu_type = None
-    pdu_dispatch = {}
-
-    h = struct.Struct("!BH")
-
-    def __cmp__(self, other):
-        return cmp(self.to_wire(), other.to_wire())
-
-    @classmethod
-    def from_wire(cls, b):
-        pdu_type, pdu_length = cls.h.unpack(b)
-        self = cls.pdu_dispatch[pdu_type]()
-        if len(b) != pdu_length:
-            raise PDUParseError
-        self.pdu_length = pdu_length
-        self.from_wire(b[cls.h.size:])
-        return self
-
-    def to_wire(self, b):
-        return self.h.pack(self.pdu_type, self.h.size + len(b)) + b
-
-
-@register_pdu
-class HelloPDU(PDU):
-
-    pdu_type = 0
-
-    h = struct.Struct("6s")
-
-    def from_wire(self, b):
-        self.my_macaddr, = self.h.unpack(b)
-
-    def to_wire(self):
-        return super(HelloPDU, self).to_wire(self.h.pack(self.my_macaddr))
-    
-@register_pdu
-class OpenPDU(PDU):
-
-    # Implementation restriction: For now, we assume and require Authentiation Data to be empty.
-
-    pdu_type = 1
-
-    h = struct.Struct("10s10spH")
-
-    def from_wire(self, b):
-        self.local_id, self.remote_id, self.attributes, self.auth_length = self.h.unpack(b)
-        if self.auth_length != 0:
-            raise PDUParserError
-
-    def to_wire(self):
-        return super(OpenPDU, self).to_wire(self.h.pack(
-            self.local_id, self.remote_id, self.attributes, 0))
-
-class PrimLoopFlagsMixin(object):
+class Encapsulation(object):
 
     _primary_flag  = 0x80
     _loopback_flag = 0x40
@@ -374,73 +307,146 @@ class PrimLoopFlagsMixin(object):
         else:
             self.flags &= ~self._loopback_flag
 
-class IPEncapsulation(PrimLoopFlagsMixin):
+class IPEncapsulation(Encapsulation):
 
-    @classmethod
-    def from_wire(cls, b, offset):
-        self = cls()
-        self.flags, self.ipaddr, self.prefixlen = self.h.unpack_from(b, offset)
-        return self, self.h.size
+    def __init__(self, b = None, offset = None):
+        if b is not None:
+            self.flags, self.ipaddr, self.prefixlen = self.h1.unpack_from(b, offset)
 
-    def to_wire(self):
-        return self.h.pack(self.flags, self.ipaddr, self.prefixlen)
+    def __len__(self):
+        return self.h1.size
 
-# Pretend for now that we can treat an MPLS label as an opaque
-# three-octet string rather than needing get/set properties.
+    def __bytes__(self):
+        return self.h1.pack(self.flags, self.ipaddr, self.prefixlen)
 
-class MPLSIPEncapsulation(PrimLoopFlagsMixin):
+class MPLSIPEncapsulation(Encapsulation):
+
+    # Pretend for now that we can treat an MPLS label as an opaque
+    # three-octet string rather than needing get/set properties.
 
     h1 = struct.Struct("BB")
     h2 = struct.Struct("3s")
 
-    @classmethod
-    def from_wire(cls, b, offset):
-        self = cls()
-        self.flags, label_count = self.h1.unpack_from(b, offset)
+    def __init__(self, b = None, offset = None):
         self.labels = []
-        offset += self.h1.size
-        for i in xrange(label_count):
-            labels.append(self.h2.unpack_from(b, offset)[0])
-            offset += self.h2.size
-        self.ipaddr, self.prefixlen = self.h3.unpack_from(b, offset)
-        return self, self.h1.size + self.h2.size * len(self.labels) + self.h3.size
+        if b is not None:
+            self.flags, label_count = self.h1.unpack_from(b, offset)
+            offset += self.h1.size
+            for i in xrange(label_count):
+                labels.append(self.h2.unpack_from(b, offset)[0])
+                offset += self.h2.size
+            self.ipaddr, self.prefixlen = self.h3.unpack_from(b, offset)
 
-    def to_wire(self):
-        return self.h1.pack(self.flags, len(labels)) \
-            + b"".join(self.h2.pack(l) for l in self.labels) \
-            + self.h13.pack(self.ipaddr, self.prefixlen)
+    def __len__(self):
+        return self.h1.size + self.h2.size * len(self.labels) + self.h3.size
 
-class EncapsulationPDU(PDU):
-
-    h = struct.Struct("H")
-
-    encap_type = None
-
-    def from_wire(self, b):
-        count, = self.h.unpack(b)
-        offset = self.h.size
-        self.encaps = []
-        for i in xrange(count):
-            e, n = self.encap_type.from_wire(b, offset)
-            encaps.append(e)
-            offset += n
-
-    def to_wire(self):
-        return super(EncapsulationPDU, self).to_wire(
-            self.h.pack(len(self.encaps)) +
-            b"".join(e.to_wire() for e in self.encaps))
+    def __bytes__(self):
+        return self.h1.pack(self.flags, len(self.labels)) \
+            + b"".join(self.h2.pack(label) for label in self.labels) \
+            + self.h3.pack(self.ipaddr, self.prefixlen)
 
 class IPv4Encapsulation(IPEncapsulation):
-    h = struct.Struct("B4sB")
+    h1 = struct.Struct("B4sB")
 
 class IPv6Encapsulation(IPEncapsulation):
-    h = struct.Struct("B16sB")
+    h1 = struct.Struct("B16sB")
 
 class MPLSIPv4Encapsulation(MPLSIPEncapsulation):
     h3 = struct.Struct("4sB")
 
 class MPLSIPv6Encapsulation(MPLSIPEncapsulation):
     h3 = struct.Struct("16sB")
+
+# PDUs
+
+def register_pdu(cls):
+    """
+    Decorator to add a PDU class to the PDU dispatch table.
+    """
+
+    assert cls.pdu_type is not None
+    assert cls.pdu_type not in cls.pdu_dispatch
+    cls.pdu_dispatch[cls.pdu_type] = cls
+
+class PDUParseError(Exception):
+    "Error parsing LSOE PDU."
+
+class PDU(object):
+    """
+    Abstract base class for PDUs.
+    """
+
+    pdu_type = None
+    pdu_dispatch = {}
+
+    h0 = struct.Struct("!BH")
+
+    def __cmp__(self, other):
+        return cmp(bytes(self), bytes(other))
+
+    @classmethod
+    def parse(cls, b):
+        pdu_type, pdu_length = cls.h0.unpack(b)
+        if len(b) != pdu_length:
+            raise PDUParseError
+        self = cls.pdu_dispatch[pdu_type](b)
+        self.bytes = b
+        return self
+
+    def _b(self, b):
+        return self.h0.pack(self.pdu_type, self.h0.size + len(b)) + b
+
+
+@register_pdu
+class HelloPDU(PDU):
+
+    pdu_type = 0
+
+    h1 = struct.Struct("6s")
+
+    def __init__(self, b = None):
+        if b is not None:
+            self.my_macaddr, = self.h1.unpack(b)
+
+    def __bytes__(self):
+        return self._b(self.h1.pack(self.my_macaddr))
+    
+@register_pdu
+class OpenPDU(PDU):
+
+    # Implementation restriction:
+    # For now, we assume and require Authentication Data to be empty.
+
+    pdu_type = 1
+
+    h1 = struct.Struct("10s10spH")
+
+    def __init__(self, b = None):
+        if b is not None:
+            self.local_id, self.remote_id, self.attributes, self.auth_length = self.h1.unpack(b)
+            if self.auth_length != 0:
+                raise PDUParserError
+
+    def __bytes__(self):
+        return self._b(self.h1.pack(self.local_id, self.remote_id, self.attributes, 0))
+
+class EncapsulationPDU(PDU):
+
+    h1 = struct.Struct("H")
+
+    encap_type = None
+
+    def __init__(self, b = None):
+        self.encaps = []
+        if b is not None:
+            count, = self.h1.unpack(b)
+            offset = self.h1.size
+            for i in xrange(count):
+                encaps.append(self.encap_type(b, offset))
+                offset += len(encaps[-1])
+
+    def __bytes__(self):
+        return self._b(self.h1.pack(len(self.encaps)) + b"".join(bytes(encap) for encap in self.encaps))
 
 @register_pdu
 class IPv4EncapsulationPDU(PDU):
@@ -467,24 +473,27 @@ class EncapsulationACKPDU(PDU):
 
     pdu_type = 3
 
-    h = struct.Struct("B")
+    h1 = struct.Struct("B")
 
-    def from_wire(self, b):
-        self.encap_type, = self.h.unpack(b)
+    def __init__(self, b = None):
+        if b is not None:
+            self.encap_type, = self.h1.unpack(b)
 
-    def to_wire(self):
-        return super(EncapsulationACKPDU, self).to_wire(self.h.pack(self.encap_type))
+    def __bytes__(self):
+        return self._b(self.h1.pack(self.encap_type))
 
 @register_pdu
 class KeepAlivePDU(PDU):
 
     pdu_type = 2
 
-    def from_wire(self, b):
+    def __init__(self, b = None):
         pass
 
-    def to_wire(self):
-        return super(KeepAlivePDU, self).to_wire("")
+    def __bytes__(self):
+        return self._b("")
+
+
 
 #
 # Network interface status and monitoring.
@@ -552,6 +561,62 @@ class Interfaces(object):
                 else:
                     print("WTF: {} event".format(msg["event"]))
 
+
+
+#
+# Session layer
+#
+
+class Session(object):
+
+    # Unclear what (if anything) needs to be a coroutine here.
+    # Depends on how much fun we want to have with dispatch mechanisms
+    # here vs pseudo threads vs ... for state.
+
+    def __init__(self, io, ifs, macaddr):
+        self.io = io
+        self.ifs = ifs
+        self.macaddr = macaddr
+        self.have_sent_open = False
+        self.have_seen_open = False
+
+    def recv(self, msg):
+        pdu = PDU.parse(msg)        
+
+        # If this is a new MAC address, the only allowed PDUs are
+        # Hello and Open.  I think current spec says each side sends
+        # the other an Open, so either we're sending an Open in
+        # response to a Hello or we're sending it in response to an
+        # Open.  Once we've sent an Open we have local state for the
+        # peer so simultaneous Opens should not be a problem.
+        #
+        # If this is not a new MAC address, we should already have
+        # local state for the peer.
+        # 
+        # Need to think about appropriate structure here.  Encode
+        # state machine as pseudo-thread state (dict of queues)?
+        # Explicit state machine data structure?  PDU dispatch
+        # methods?  Don't try to use all the toys in the box, question
+        # is which ones help.
+        #
+        # State machine is pretty simple:
+        #
+        # * Each side sends an OPEN
+        # * Each side acks the other side's open
+        # * Each side should send encaps
+        # * each side acks the other's encaps
+        # * After which point we're just doing keepalives forever
+        #
+        # May be able to encode state machine(s) as instance variables
+        # containing bound methods, eg:
+        #
+        #   self.next_state = self.blarg_state
+        #
+        # then we just dispatch to self.next_state() at the
+        # appropriate point, or something like that.
+
+
+
 #
 # Protocol engine
 #
@@ -585,51 +650,3 @@ def main():
         # main() might want to be a class to simplify shared data.
         #
         # Need something here to gc dead sessions?
-
-class Session(object):
-
-    # Unclear what (if anything) needs to be a coroutine here.
-    # Depends on how much fun we want to have with dispatch mechanisms
-    # here vs pseudo threads vs ... for state.
-
-    def __init__(self, io, ifs, macaddr):
-        self.io = io
-        self.ifs = ifs
-        self.macaddr = macaddr
-        self.have_sent_open = False
-        self.have_seen_open = False
-
-    def recv(self, msg):
-        pdu = PDU.from_wire(msg)        
-
-        # If this is a new MAC address, the only allowed PDUs are
-        # Hello and Open.  I think current spec says each side sends
-        # the other an Open, so either we're sending an Open in
-        # response to a Hello or we're sending it in response to an
-        # Open.  Once we've sent an Open we have local state for the
-        # peer so simultaneous Opens should not be a problem.
-        #
-        # If this is not a new MAC address, we should already have
-        # local state for the peer.
-        # 
-        # Need to think about appropriate structure here.  Encode
-        # state machine as pseudo-thread state (dict of queues)?
-        # Explicit state machine data structure?  PDU dispatch
-        # methods?  Don't try to use all the toys in the box, question
-        # is which ones help.
-        #
-        # State machine is pretty simple:
-        #
-        # * Each side sends an OPEN
-        # * Each side acks the other side's open
-        # * Each side should send encaps
-        # * each side acks the other's encaps
-        # * After which point we're just doing keepalives forever
-        #
-        # May be able to encode state machine(s) as instance variables
-        # containing bound methods, eg:
-        #
-        #   self.next_state = self.blarg_state
-        #
-        # then we just dispatch to self.next_state() at the
-        # appropriate point, or something like that.
