@@ -101,8 +101,8 @@ class Datagram(object):
              0x5e,0x6c,0xa9,0x13,0x57,0x25,0xb5,0xe3,0xbd,0xa8,0x3a,0x01,
              0x05,0x59,0x2a,0x46)
 
-    def __init__(self, bytes, sa_ll, version, frag, length, checksum, timestamp = None):
-        self.bytes     = bytes
+    def __init__(self, b, sa_ll, version, frag, length, checksum, timestamp = None):
+        self.bytes     = b
         self.sa_ll     = sa_ll
         self.version   = version
         self.frag      = frag
@@ -111,12 +111,12 @@ class Datagram(object):
         self.timestamp = timestamp
 
     @classmethod
-    def incoming(cls, bytes, sa_ll):
-        version, frag, length, checksum = cls.h.unpack(bytes)
-        if length > len(bytes):
-            bytes = bytes[:length]
+    def incoming(cls, b, sa_ll):
+        version, frag, length, checksum = cls.h.unpack(b)
+        if length > len(b):
+            b = b[:length]
         return cls(
-            bytes     = bytes,
+            b         = b,
             sa_ll     = sa_ll,
             version   = version,
             frag      = frag,
@@ -131,14 +131,14 @@ class Datagram(object):
                 self.bytes[self.h.size:], self.frag, self.length)
 
     @classmethod
-    def outgoing(cls, bytes, sa_ll, frag, last):
+    def outgoing(cls, b, sa_ll, frag, last):
         if last:
             frag |= Datagram.LAST_FLAG
-        length = cls.h.size + len(bytes)
-        cksum  = cls._sbox_checksum(bytes, frag, length)
+        length = cls.h.size + len(b)
+        cksum  = cls._sbox_checksum(b, frag, length)
         hdr    = cls.h.pack(LSOE_VERSION, frag, length, cksum)
         return cls(
-            bytes     = hdr + bytes,
+            b         = hdr + b,
             sa_ll     = sa_ll,
             version   = LSOE_VERSION,
             frag      = frag,
@@ -146,14 +146,14 @@ class Datagram(object):
             checksum  = cksum)
 
     @classmethod
-    def split_message(cls, bytes, macaddr, ifname):
+    def split_message(cls, b, macaddr, ifname):
         sa_ll = SockAddrLL(macaddr  = macaddr,
                            ifname   = ifname,
                            protocol = ETH_P_LSOE,
                            pkttype  = 0,
                            arptype  = 0)
         n = ETH_DATA_LEN - cls.h.size
-        chunks = [bytes[i : i + n] for i in xrange(0, bytes, n)]
+        chunks = [b[i : i + n] for i in xrange(0, len(b), n)]
         for i, chunk in enumerate(chunks):
             yield cls.outgoing(chunk, sa_ll, i, chunk is chunks[-1])
 
@@ -166,8 +166,8 @@ class Datagram(object):
         return self.frag & ~self.LAST_FLAG
 
     @classmethod
-    def _sbox_checksum(cls, bytes, frag, length, version = LSOE_VERSION):
-        pkt = cls.h.pack(version, frag, length, 0) + bytes
+    def _sbox_checksum(cls, b, frag, length, version = LSOE_VERSION):
+        pkt = cls.h.pack(version, frag, length, 0) + b
         sum, result = [0, 0, 0, 0], 0
         for i, b in enumerate(pkt):
             sum[i & 3] += self._sbox[b]
@@ -205,17 +205,17 @@ class EtherIO(object):
         self.s = socket.socket(socket.PF_PACKET, socket.SOCK_DGRAM, socket.htons(ETH_P_LSOE))
         self.ioloop = tornado.ioloop.IOLoop.current()
         self.ioloop.add_handler(self.s, self._handle_read,  tornado.ioloop.READ)
-        self.ioloop.add_handler(self.s, self._handle_error, tornado.ioloop.ERROR)
+        #self.ioloop.add_handler(self.s, self._handle_error, tornado.ioloop.ERROR)
         self.ioloop.PeriodicCallback(self._gc, lsoe_msg_reassembly_timeout * 500)
-        # Probably need one or more self.ioloop.spawn_callback() calls here
+        # Might need one or more self.ioloop.spawn_callback() calls somewhere
 
     # Returns a Future, awaiting which returns a (bytes, macaddr) tuple
     def read(self):
         return self.q.get()
 
     # Breaks bytes into datagrams and sends them
-    def write(self, bytes, macaddr):
-        for d in Datagram.split_message(bytes, macaddr, self.macaddrs[macaddr].ifname):
+    def write(self, b, macaddr):
+        for d in Datagram.split_message(b, macaddr, self.macaddrs[macaddr].ifname):
             self.s.sendto(d.bytes, d.sa_ll)
 
     # Tears down I/O
@@ -270,7 +270,7 @@ class EtherIO(object):
                 del self.macaddrs[macaddr]
 
 #
-# Application layer
+# Presentation layer
 #
 
 def register_pdu(cls):
@@ -278,6 +278,7 @@ def register_pdu(cls):
     Decorator to add a PDU class to the PDU dispatch table.
     """
 
+    assert cls.pdu_type is not None
     assert cls.pdu_type not in cls.pdu_dispatch
     cls.pdu_dispatch[cls.pdu_type] = cls
 
@@ -301,17 +302,17 @@ class PDU(object):
         return cmp(self.to_wire(), other.to_wire())
 
     @classmethod
-    def from_wire(cls, bytes):
-        pdu_type, pdu_length = cls.h.unpack(bytes)
+    def from_wire(cls, b):
+        pdu_type, pdu_length = cls.h.unpack(b)
         self = cls.pdu_dispatch[pdu_type]()
-        if len(bytes) != pdu_length:
+        if len(b) != pdu_length:
             raise PDUParseError
         self.pdu_length = pdu_length
-        self.from_wire(bytes[cls.h.size:])
+        self.from_wire(b[cls.h.size:])
         return self
 
-    def to_wire(self, bytes):
-        return self.h.pack(self.pdu_type, self.h.size + len(bytes)) + bytes
+    def to_wire(self, b):
+        return self.h.pack(self.pdu_type, self.h.size + len(b)) + b
 
 
 @register_pdu
@@ -321,8 +322,8 @@ class HelloPDU(PDU):
 
     h = struct.Struct("6s")
 
-    def from_wire(self, bytes):
-        self.my_macaddr, = self.h.unpack(bytes)
+    def from_wire(self, b):
+        self.my_macaddr, = self.h.unpack(b)
 
     def to_wire(self):
         return super(HelloPDU, self).to_wire(self.h.pack(self.my_macaddr))
@@ -336,8 +337,8 @@ class OpenPDU(PDU):
 
     h = struct.Struct("10s10spH")
 
-    def from_wire(self, bytes):
-        self.local_id, self.remote_id, self.attributes, self.auth_length = self.h.unpack(bytes)
+    def from_wire(self, b):
+        self.local_id, self.remote_id, self.attributes, self.auth_length = self.h.unpack(b)
         if self.auth_length != 0:
             raise PDUParserError
 
@@ -376,9 +377,9 @@ class PrimLoopFlagsMixin(object):
 class IPEncapsulation(PrimLoopFlagsMixin):
 
     @classmethod
-    def from_wire(cls, bytes, offset):
+    def from_wire(cls, b, offset):
         self = cls()
-        self.flags, self.ipaddr, self.prefixlen = self.h.unpack_from(bytes, offset)
+        self.flags, self.ipaddr, self.prefixlen = self.h.unpack_from(b, offset)
         return self, self.h.size
 
     def to_wire(self):
@@ -393,15 +394,15 @@ class MPLSIPEncapsulation(PrimLoopFlagsMixin):
     h2 = struct.Struct("3s")
 
     @classmethod
-    def from_wire(cls, bytes, offset):
+    def from_wire(cls, b, offset):
         self = cls()
-        self.flags, label_count = self.h1.unpack_from(bytes, offset)
+        self.flags, label_count = self.h1.unpack_from(b, offset)
         self.labels = []
         offset += self.h1.size
         for i in xrange(label_count):
-            labels.append(self.h2.unpack_from(bytes, offset)[0])
+            labels.append(self.h2.unpack_from(b, offset)[0])
             offset += self.h2.size
-        self.ipaddr, self.prefixlen = self.h3.unpack_from(bytes, offset)
+        self.ipaddr, self.prefixlen = self.h3.unpack_from(b, offset)
         return self, self.h1.size + self.h2.size * len(self.labels) + self.h3.size
 
     def to_wire(self):
@@ -415,12 +416,12 @@ class EncapsulationPDU(PDU):
 
     encap_type = None
 
-    def from_wire(self, bytes):
-        count, = self.h.unpack(bytes)
+    def from_wire(self, b):
+        count, = self.h.unpack(b)
         offset = self.h.size
         self.encaps = []
         for i in xrange(count):
-            e, n = self.encap_type.from_wire(bytes, offset)
+            e, n = self.encap_type.from_wire(b, offset)
             encaps.append(e)
             offset += n
 
@@ -468,8 +469,8 @@ class EncapsulationACKPDU(PDU):
 
     h = struct.Struct("B")
 
-    def from_wire(self, bytes):
-        self.encap_type, = self.h.unpack(bytes)
+    def from_wire(self, b):
+        self.encap_type, = self.h.unpack(b)
 
     def to_wire(self):
         return super(EncapsulationACKPDU, self).to_wire(self.h.pack(self.encap_type))
@@ -479,7 +480,7 @@ class KeepAlivePDU(PDU):
 
     pdu_type = 2
 
-    def from_wire(self, bytes):
+    def from_wire(self, b):
         pass
 
     def to_wire(self):
