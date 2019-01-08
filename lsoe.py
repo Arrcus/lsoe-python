@@ -413,25 +413,45 @@ class PDU(object):
 
     allowed_states = ()
 
-    h0 = struct.Struct("!BH")
+    h0 = struct.Struct("!BHL")
 
     def __cmp__(self, other):
         return cmp(bytes(self), bytes(other))
 
     @classmethod
     def parse(cls, b):
-        pdu_type, pdu_length = cls.h0.unpack(b)
+        pdu_type, pdu_length, pdu_number = cls.h0.unpack(b)
         if len(b) != pdu_length:
             raise PDUParseError
         self = cls.pdu_dispatch[pdu_type](b)
-        self.bytes = b
+        self.pdu_bytes  = b
+        self.pdu_length = pdu_length
+        self.pdu_number = pdu_number
         return self
 
     def _b(self, b):
-        return self.h0.pack(self.pdu_type, self.h0.size + len(b)) + b
+        return self.h0.pack(self.pdu_type, self.h0.size + len(b), self.pdu_number) + b
 
     def allowed(self, state):
         return state in self.allowed_states
+
+    # Autogenerate pdu_number values on demand.
+
+    _next_pdu_number = list(struct.unpack("!L", os.urandom(4)))
+
+    @property
+    def pdu_number(self):
+        try:
+            return self._pdu_number
+        except AttributeError:
+            self._pdu_number = self._next_pdu_number[0]
+            self._next_pdu_number[0] += 1
+            self._next_pdu_number[0] &= 0xFFFFFFFF
+            return self._pdu_number
+
+    @pdu_number.setter
+    def pdu_number(self, value):
+        self._pdu_number = value
 
 
 @register_pdu
@@ -472,6 +492,38 @@ class OpenPDU(PDU):
     def __bytes__(self):
         return self._b(self.h1.pack(self.local_id, self.remote_id, self.attributes, 0))
 
+@register_pdu
+class KeepAlivePDU(PDU):
+
+    pdu_type = 2
+
+    def __init__(self, b = None):
+        pass
+
+    def __bytes__(self):
+        return self._b(b"")
+
+@register_pdu
+class ACKPDU(PDU):
+
+    pdu_type = 3
+
+    h1 = struct.Struct("BL")
+
+    def __init__(self, b = None):
+        if b is not None:
+            acked_type, self.acked_number = self.h1.unpack(b)
+            try:
+                self.acked_type = self.pdu_dispatch[acked_type]
+            except:
+                raise PDUParseError
+            if not issubclass(self.acked_type, (OpenPDU, EncapsulationPDU)):
+                raise PDUParseError                
+
+    def __bytes__(self):
+        assert issubclass(self.acked_type, (OpenPDU, EncapsulationPDU))
+        return self._b(self.h1.pack(self.acked_type.pdu_type, self.acked_number))
+
 class EncapsulationPDU(PDU):
 
     h1 = struct.Struct("H")
@@ -509,31 +561,6 @@ class MPLSIPv4EncapsulationPDU(PDU):
 class MPLSIPv6EncapsulationPDU(PDU):
     pdu_type = 7
     encap_type = MPLSIPv6Encapsulation
-
-@register_pdu
-class EncapsulationACKPDU(PDU):
-
-    pdu_type = 3
-
-    h1 = struct.Struct("B")
-
-    def __init__(self, b = None):
-        if b is not None:
-            self.encap_type, = self.h1.unpack(b)
-
-    def __bytes__(self):
-        return self._b(self.h1.pack(self.encap_type))
-
-@register_pdu
-class KeepAlivePDU(PDU):
-
-    pdu_type = 2
-
-    def __init__(self, b = None):
-        pass
-
-    def __bytes__(self):
-        return self._b(b"")
 
 
 
