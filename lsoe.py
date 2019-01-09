@@ -270,40 +270,6 @@ class EtherIO(object):
 
 
 #
-# Protocol states
-# 
-
-class States(enum.Enum):
-    "Protocol states."
-
-    # Not really happy with these yet.
-    #
-    # ACK wraps a PDU type, Open or any of the Encapsulation PDU types.
-
-    # So Open is simple, lock step wait for ACK(Open), but the
-    # encapsulations can arrive in any order, some encapsulations
-    # might even be omitted.  We're kind of hanging out in the state
-    # of 'I generated some encapsulations and am waiting for them to
-    # be acknowledged".
-    #
-    # In implementation terms, this might be a fun use of Python3's
-    # bit-flag enums, we're just waiting for the IOR of all the things
-    # we need acknowledged.  Randy was hoping to get a state machine
-    # he can feed to Scudder out of this, though.
-    #
-    # Following is not quite there yet.
-
-    Initial     = enum.auto()   # No PDU seen yet
-    OpenSent    = enum.auto()   # Seen Hello or Open and sent Open, waiting for ACK(Open)
-    OpenAcked   = enum.auto()   # Seen ACK(Open), Sending Encaps
-    EncapsSent  = enum.auto()   # Waiting for encaps to be acked
-    EncapsAcked = enum.auto()   # Up, just expecting keep-alive
-
-    # More as we go
-
-
-
-#
 # Presentation layer: Encapsulations
 #
 
@@ -397,8 +363,8 @@ def register_pdu(cls):
     """
 
     assert cls.pdu_type is not None
-    assert cls.pdu_type not in cls.pdu_dispatch
-    cls.pdu_dispatch[cls.pdu_type] = cls
+    assert cls.pdu_type not in cls.pdu_type_map
+    cls.pdu_type_map[cls.pdu_type] = cls
 
 class PDUParseError(Exception):
     "Error parsing LSOE PDU."
@@ -409,9 +375,7 @@ class PDU(object):
     """
 
     pdu_type = None
-    pdu_dispatch = {}
-
-    allowed_states = ()
+    pdu_type_map = {}
 
     h0 = struct.Struct("!BHL")
 
@@ -423,7 +387,7 @@ class PDU(object):
         pdu_type, pdu_length, pdu_number = cls.h0.unpack(b)
         if len(b) != pdu_length:
             raise PDUParseError
-        self = cls.pdu_dispatch[pdu_type](b)
+        self = cls.pdu_type_map[pdu_type](b)
         self.pdu_bytes  = b
         self.pdu_length = pdu_length
         self.pdu_number = pdu_number
@@ -431,9 +395,6 @@ class PDU(object):
 
     def _b(self, b):
         return self.h0.pack(self.pdu_type, self.h0.size + len(b), self.pdu_number) + b
-
-    def allowed(self, state):
-        return state in self.allowed_states
 
     # Autogenerate pdu_number values on demand.
 
@@ -467,17 +428,12 @@ class HelloPDU(PDU):
 
     def __bytes__(self):
         return self._b(self.h1.pack(self.my_macaddr))
-    
-    def allowed(self, state):
-        return True             # Hello is allowed in any state
 
 @register_pdu
 class OpenPDU(PDU):
 
     # Implementation restriction:
     # For now, we assume and require Authentication Data to be empty.
-
-    allowed_states = Initial,
 
     pdu_type = 1
 
@@ -514,7 +470,7 @@ class ACKPDU(PDU):
         if b is not None:
             acked_type, self.acked_number = self.h1.unpack(b)
             try:
-                self.acked_type = self.pdu_dispatch[acked_type]
+                self.acked_type = self.pdu_type_map[acked_type]
             except:
                 raise PDUParseError
             if not issubclass(self.acked_type, (OpenPDU, EncapsulationPDU)):
@@ -636,53 +592,85 @@ class Interfaces(object):
 # Session layer
 #
 
+class State(enum.Flag):
+
+    # *Still* not right.  Well, maybe.
+    # Need to record that we've sent Open and ACK(Open),
+    # maybe that's just Session's retransmission set().
+
+    CLOSED         = False
+    SAW_PEER_OPEN  = enum.auto()
+    OUR_OPEN_ACKED = enum.auto()
+    OPEN           = SAW_PEER_OPEN | OUR_OPEN_ACKED
+
+    # Don't know yet whether we need this one -- request to main() (or
+    # whatever) to delete this from sessions[].
+    #
+    #DEAD          = enum.auto()
+
 class Session(object):
 
     # Unclear what (if anything) needs to be a coroutine here.
-    # Depends on how much fun we want to have with dispatch mechanisms
-    # here vs pseudo threads vs ... for state.
 
     def __init__(self, io, ifs, macaddr):
         self.io = io
         self.ifs = ifs
         self.macaddr = macaddr
-        self.have_sent_open = False
-        self.have_seen_open = False
+        self.state = State.CLOSED
+        self.last_open_pdu_number = None
+        self.last_keepalive = None
+        self.dispatch = {}
+        self.rxq = {}
+        for k, v in PDU.pdu_type_map.items():
+            self.dispatch[k] = getattr(self, "handle_" + v.__name__)
+            if issubclass(v, (OpenPDU, EncapsulationPDU)):
+                self.rxq[k] = []
 
     def recv(self, msg):
         pdu = PDU.parse(msg)        
+        self.dispatch[pdu.pdu_type](pdu)
 
-        # If this is a new MAC address, the only allowed PDUs are
-        # Hello and Open.  I think current spec says each side sends
-        # the other an Open, so either we're sending an Open in
-        # response to a Hello or we're sending it in response to an
-        # Open.  Once we've sent an Open we have local state for the
-        # peer so simultaneous Opens should not be a problem.
-        #
-        # If this is not a new MAC address, we should already have
-        # local state for the peer.
-        # 
-        # Need to think about appropriate structure here.  Encode
-        # state machine as pseudo-thread state (dict of queues)?
-        # Explicit state machine data structure?  PDU dispatch
-        # methods?  Don't try to use all the toys in the box, question
-        # is which ones help.
-        #
-        # State machine is pretty simple:
-        #
-        # * Each side sends an OPEN
-        # * Each side acks the other side's open
-        # * Each side should send encaps
-        # * each side acks the other's encaps
-        # * After which point we're just doing keepalives forever
-        #
-        # May be able to encode state machine(s) as instance variables
-        # containing bound methods, eg:
-        #
-        #   self.next_state = self.blarg_state
-        #
-        # then we just dispatch to self.next_state() at the
-        # appropriate point, or something like that.
+    # If this is a new MAC address, the only allowed PDUs are
+    # Hello and Open.  I think current spec says each side sends
+    # the other an Open, so either we're sending an Open in
+    # response to a Hello or we're sending it in response to an
+    # Open.  Once we've sent an Open we have local state for the
+    # peer so simultaneous Opens should not be a problem.
+
+    def handle_HelloPDU(self, pdu):
+        if self.state == State.CLOSED:
+            self.send_open()
+
+    def handle_OpenPDU(self, pdu):
+        raise NotImplementedError
+
+    def handle_KeepAlivePDU(self, pdu):
+        if self.state == State.OPEN:
+            self.last_keepalive = time.time()
+        else:
+            self.log_error(pdu)
+
+    def handle_ACKPDU(self, pdu):
+        raise NotImplementedError
+
+    def handle_encapsulation(self, pdu):
+        if self.state == State.OPEN:
+            self.send_ACK(pdu)
+            self.report_rfc7752(pdu)
+        else:
+            self.log_error(pdu)
+
+    def handle_IPv4EncapsulationPDU(self, pdu):
+        self.handle_encapsulation(pdu)
+
+    def handle_IPv6EncapsulationPDU(self, pdu):
+        self.handle_encapsulation(pdu)
+
+    def handle_MPLSIPv4EncapsulationPDU(self, pdu):
+        self.handle_encapsulation(pdu)
+
+    def handle_MPLSIPv6EncapsulationPDU(self, pdu):
+        self.handle_encapsulation(pdu)
 
 
 
