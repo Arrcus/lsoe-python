@@ -666,7 +666,19 @@ class Session(object):
         self.last_keepalive = time.time()
 
     def handle_ACKPDU(self, pdu):
-        raise NotImplementedError
+        if pdu.pdu_type not in self.rxq:
+            logger.info("Received ACK for unexpected PDU type: %r", pdu)
+            return
+        if not self.rxq[pdu.pdu_type]:
+            logger.info("Received ACK with no relevant outgoing PDU: %r", pdu)
+            return
+        logger.info("Received ACK %r for PDU %r", pdu, self.rxq[pdu.pdu_type])
+        del self.rxq[pdu.pdu_type]
+        if isinstance(pdu, OpenPDU):
+            assert not self.rxq[pdu.pdu_type]
+            self.our_open_acked = True
+        elif self.rxq[pdu.pdu_type]:
+            self.xmit_next_pdu(pdu.pdu_type)
 
     def handle_encapsulation(self, pdu):
         if not self.is_open:
