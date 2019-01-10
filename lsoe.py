@@ -18,6 +18,8 @@ the final protocol.
 #   cooked.  So for now we use one of the "playground" EtherTypes IEEE
 #   set aside for use for exactly this purpose.
 
+import os
+import sys
 import enum
 import time
 import socket
@@ -66,6 +68,9 @@ SockAddrLL = collections.namedtuple("Sockaddr_LL",
 # Magic parameters which ought to come from a configuration file
 lsoe_msg_reassembly_timeout = 1   # seconds
 lsoe_macaddr_cache_timeout  = 300 # Seconds, number pulled out of a hat
+
+# Logging setup
+logger = logging.getLogger(os.path.splitext(os.path.basename(sys.argv[0]))[0])
 
 
 
@@ -377,43 +382,27 @@ class PDU(object):
     pdu_type = None
     pdu_type_map = {}
 
-    h0 = struct.Struct("!BHL")
+    h0 = struct.Struct("!BH")
 
     def __cmp__(self, other):
         return cmp(bytes(self), bytes(other))
 
     @classmethod
     def parse(cls, b):
-        pdu_type, pdu_length, pdu_number = cls.h0.unpack(b)
+        pdu_type, pdu_length = cls.h0.unpack(b)
         if len(b) != pdu_length:
             raise PDUParseError
         self = cls.pdu_type_map[pdu_type](b)
-        self.pdu_bytes  = b
-        self.pdu_length = pdu_length
-        self.pdu_number = pdu_number
+        #self.pdu_bytes = b
         return self
 
     def _b(self, b):
-        return self.h0.pack(self.pdu_type, self.h0.size + len(b), self.pdu_number) + b
+        return self.h0.pack(self.pdu_type, self.h0.size + len(b)) + b
 
-    # Autogenerate pdu_number values on demand.
-
-    _next_pdu_number = list(struct.unpack("!L", os.urandom(4)))
-
-    @property
-    def pdu_number(self):
-        try:
-            return self._pdu_number
-        except AttributeError:
-            self._pdu_number = self._next_pdu_number[0]
-            self._next_pdu_number[0] += 1
-            self._next_pdu_number[0] &= 0xFFFFFFFF
-            return self._pdu_number
-
-    @pdu_number.setter
-    def pdu_number(self, value):
-        self._pdu_number = value
-
+    def _kwset(self, b, kwargs):
+        assert b is None or not kwargs
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
 @register_pdu
 class HelloPDU(PDU):
@@ -422,7 +411,8 @@ class HelloPDU(PDU):
 
     h1 = struct.Struct("6s")
 
-    def __init__(self, b = None):
+    def __init__(self, b = None, **kwargs):
+        self._kwset(b, kwargs)
         if b is not None:
             self.my_macaddr, = self.h1.unpack(b)
 
@@ -432,29 +422,52 @@ class HelloPDU(PDU):
 @register_pdu
 class OpenPDU(PDU):
 
-    # Implementation restriction:
-    # For now, we assume and require Authentication Data to be empty.
+    # Implementation issues:
+    #
+    # For now, we assume and require Authentication Data to be empty,
+    # because the specification on what should go there isn't done.
+    #
+    # We treat the open nonce as a four byte string, because that
+    # works well with os.urandom(); if we were using int(time.time())
+    # as our nonce source, we'd represent nonces as single 32-bit
+    # unsigned integers instead.  Behavior on the wire is the same in
+    # either case, 32 bits of nobody else's business.
 
     pdu_type = 1
 
-    h1 = struct.Struct("10s10spH")
+    h1 = struct.Struct("4s10s10spH")
 
-    def __init__(self, b = None):
+    def __init__(self, b = None, **kwargs):
+        self._kwset(b, kwargs)
         if b is not None:
-            self.local_id, self.remote_id, self.attributes, self.auth_length = self.h1.unpack(b)
+            self.nonce, self.local_id, self.remote_id, self.attributes, self.auth_length = self.h1.unpack(b)
             if self.auth_length != 0:
                 raise PDUParserError
 
     def __bytes__(self):
         return self._b(self.h1.pack(self.local_id, self.remote_id, self.attributes, 0))
 
+    @property
+    def nonce(self):
+        try:
+            return self._nonce
+        except AttributeError:
+            self._nonce = os.urandom(4)
+            return self._nonce
+
+    @nonce.setter
+    def nonce(self, value):
+        self._nonce = value
+
 @register_pdu
 class KeepAlivePDU(PDU):
 
     pdu_type = 2
 
-    def __init__(self, b = None):
-        pass
+    def __init__(self, b = None, **kwargs):
+        assert not kwargs
+        if b not in (None, b""):
+            raise PDUParseError
 
     def __bytes__(self):
         return self._b(b"")
@@ -466,7 +479,8 @@ class ACKPDU(PDU):
 
     h1 = struct.Struct("BL")
 
-    def __init__(self, b = None):
+    def __init__(self, b = None, **kwargs):
+        self._kwset(b, kwargs)
         if b is not None:
             acked_type, self.acked_number = self.h1.unpack(b)
             try:
@@ -486,8 +500,9 @@ class EncapsulationPDU(PDU):
 
     encap_type = None
 
-    def __init__(self, b = None):
+    def __init__(self, b = None, **kwargs):
         self.encaps = []
+        self._kwset(b, kwargs)
         if b is not None:
             count, = self.h1.unpack(b)
             offset = self.h1.size
@@ -592,22 +607,6 @@ class Interfaces(object):
 # Session layer
 #
 
-class State(enum.Flag):
-
-    # *Still* not right.  Well, maybe.
-    # Need to record that we've sent Open and ACK(Open),
-    # maybe that's just Session's retransmission set().
-
-    CLOSED         = False
-    SAW_PEER_OPEN  = enum.auto()
-    OUR_OPEN_ACKED = enum.auto()
-    OPEN           = SAW_PEER_OPEN | OUR_OPEN_ACKED
-
-    # Don't know yet whether we need this one -- request to main() (or
-    # whatever) to delete this from sessions[].
-    #
-    #DEAD          = enum.auto()
-
 class Session(object):
 
     # Unclear what (if anything) needs to be a coroutine here.
@@ -616,9 +615,7 @@ class Session(object):
         self.io = io
         self.ifs = ifs
         self.macaddr = macaddr
-        self.state = State.CLOSED
-        self.last_open_pdu_number = None
-        self.last_keepalive = None
+        self.is_open = False
         self.dispatch = {}
         self.rxq = {}
         for k, v in PDU.pdu_type_map.items():
@@ -626,39 +623,57 @@ class Session(object):
             if issubclass(v, (OpenPDU, EncapsulationPDU)):
                 self.rxq[k] = []
 
+    def close(self):
+        if self.is_open:
+            self.cleanup_rfc7752()
+        self.is_open = False
+        for q in self.rxq.values():
+            del q[:]
+
+    @property
+    def is_open(self):
+        return self.our_open_acked and self.peer_open_nonce is not None
+
+    @is_open.setter
+    def is_open(self, value):
+        assert not value
+        self.our_open_acked = False
+        self.peer_open_nonce = None
+        self.last_keepalive = None
+
     def recv(self, msg):
         pdu = PDU.parse(msg)        
         self.dispatch[pdu.pdu_type](pdu)
 
-    # If this is a new MAC address, the only allowed PDUs are
-    # Hello and Open.  I think current spec says each side sends
-    # the other an Open, so either we're sending an Open in
-    # response to a Hello or we're sending it in response to an
-    # Open.  Once we've sent an Open we have local state for the
-    # peer so simultaneous Opens should not be a problem.
-
     def handle_HelloPDU(self, pdu):
-        if self.state == State.CLOSED:
-            self.send_open()
+        self.send_open_maybe()
 
     def handle_OpenPDU(self, pdu):
-        raise NotImplementedError
+        assert pdu.nonce is not None
+        if pdu.nonce == self.peer_open_nonce:
+            logger.info("Discarding duplicate OpenPDU: %r", pdu)
+            return
+        if self.peer_open_nonce is not None:
+            self.close()
+        self.peer_open_nonce = pdu.nonce
+        self.send_ack(pdu)
+        self.send_open_maybe()
 
     def handle_KeepAlivePDU(self, pdu):
-        if self.state == State.OPEN:
-            self.last_keepalive = time.time()
-        else:
-            self.log_error(pdu)
+        if not self.is_open:
+            logger.info("Received keepalive but connection not open: %r", pdu)
+            return
+        self.last_keepalive = time.time()
 
     def handle_ACKPDU(self, pdu):
         raise NotImplementedError
 
     def handle_encapsulation(self, pdu):
-        if self.state == State.OPEN:
-            self.send_ACK(pdu)
-            self.report_rfc7752(pdu)
-        else:
-            self.log_error(pdu)
+        if not self.is_open:
+            logger.info("Received encapsulation but connection not open: %r", pdu)
+            return
+        self.send_ACK(pdu)
+        self.report_rfc7752(pdu)
 
     def handle_IPv4EncapsulationPDU(self, pdu):
         self.handle_encapsulation(pdu)
@@ -671,6 +686,14 @@ class Session(object):
 
     def handle_MPLSIPv6EncapsulationPDU(self, pdu):
         self.handle_encapsulation(pdu)
+
+    def send_open_maybe(self, pdu):
+        if self.our_open_acked or self.rxq[OpenPDU.pdu_type]:
+            return
+        raise NotImplementedError
+
+    def send_ack(self, pdu):
+        raise NotImplementedError
 
 
 
