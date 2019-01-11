@@ -25,7 +25,9 @@ import time
 import socket
 import struct
 import logging
+import argparse
 import collections
+import configparser
 
 import tornado.gen
 import tornado.locks
@@ -558,6 +560,17 @@ class Interface:
 
 class Interfaces(dict):
     
+    # May need to add a Queue here into which we drop some kind of
+    # object describing each change, so that Session or Main can
+    # generate encap messages based on objects pulled from that queue.
+    # Or something.  Randy says each encap message is a total
+    # replacement, and we need to think about session restarts, so
+    # need a bit more thought about what we should be generating here.
+
+    # May want to back out using self[] for both .ifindex[] and
+    # .ifnames[], cute but annoying to iterate.  Guess it depends on
+    # whether lookup or iteration is the common operation.
+
     def __init__(self):
         # Race condition: open event monitor socket before doing initial scans.
         self.ip = pyroute2.RawIPRoute()
@@ -746,16 +759,41 @@ class Session:
 #
 # Need something here to gc dead sessions?
 
+default_config = '''\
+
+# Herein lies the default configuration values, expressed in the same syntax
+# as the (perhaps) optional configuration file.
+
+[lsoe]
+
+fee = blarg
+fie = ${fee}
+foe = ${fie}${fum}${fie}
+fum = yowza
+
+'''
+
 class Main:
 
     @tornado.gen.coroutine
     def main(self):
 
-        # Probably ought to be reading config file before doing anything else
+        ap = argparse.ArgumentParser()
+        ap.add_argument("-c", "--config", type = argparse.FileType("r"), help = "configuration file")
+        args = ap.parse_args()
 
+        cfg = configparser.ConfigParser(interpolation = configparser.ExtendedInterpolation)
+        cfg.read_string(default_config)
+        if args.config is not None:
+            cfg.read_file(args.config)
+
+        self.cfg = cfg["lsoe"]
         self.sessions = {}
         self.ifs = Interfaces()
         self.io  = EtherIO()
+
+        # Do something here to start the other coroutines
+
 
     @tornado.gen.coroutine
     def receiver(self):

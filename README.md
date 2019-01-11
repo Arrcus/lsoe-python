@@ -63,6 +63,10 @@ haven't found equivalent in `asyncio`.  Well , maybe:
 
 https://stackoverflow.com/questions/37278647/fire-and-forget-python-async-await
 
+Simpler approach: handle this with a single looping coroutine in the
+`Main` class, which iterates over sessions and calls a method in each
+session to handle timer events in that session, etc.  Much simpler
+control structure, doesn't require fire-and-forget voodoo.
 
 Implementation environment
 --------------------------
@@ -73,6 +77,11 @@ Will probably use Tornado initially so don't have to learn entire
 asyncio API in a hurry, but long term it may be possible to do
 everything we need with standard libraries, since all we really need
 is datagram sockets, coroutines, and supporting primatives like queues.
+
+Er, on further analysis: "real" async coroutines (`await`, `async
+def`, `asyncio`, etc) look fairly plausible, but were new in Python
+3.5.  Our initial target is Debian Jessie, which is Python 3.4, so we
+may be sticking with Tornado for a while.
 
 Raw ethernet frame socket I/O is not well documented, see Linux
 packet(7) for what doc there is.
