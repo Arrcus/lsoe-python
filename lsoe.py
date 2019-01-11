@@ -212,13 +212,15 @@ class EtherIO:
         self.ioloop.PeriodicCallback(self._gc, lsoe_msg_reassembly_timeout * 500)
         # Might need one or more self.ioloop.spawn_callback() calls somewhere
 
-    # Returns a Future, awaiting which returns a (bytes, macaddr) tuple
+    # Returns a Future, awaiting which returns a (bytes, macaddr, ifname) tuple
     def read(self):
         return self.q.get()
 
     # Convert PDU to bytes, breaks into datagrams, and sends them
-    def write(self, pdu, macaddr):
-        for d in Datagram.split_message(bytes(pdu), macaddr, self.macaddrs[macaddr].ifname):
+    def write(self, pdu, macaddr, ifname = None):
+        if ifname is None:
+            ifname = self.macaddrs[macaddr].ifname
+        for d in Datagram.split_message(bytes(pdu), macaddr, ifname):
             self.s.sendto(d.bytes, d.sa_ll)
 
     # Tears down I/O
@@ -256,7 +258,7 @@ class EtherIO:
             if d.dgram_number != i or d.is_final != (d is rq[-1]):
                 return
         del self.dgrams[sa_ll.macaddr]
-        self.q.put_nowait((b"".join(d.payload for d in rq), sa_ll.macaddr))
+        self.q.put_nowait((b"".join(d.payload for d in rq), sa_ll.macaddr, sa_ll.ifname))
 
     # Internal handler to garbage collect incomplete messages and stale MAC addresses
     def _gc(self):
@@ -554,7 +556,7 @@ class Interface:
         # Add other flags as needed, eg, IFF_LOWER_UP
         return self.flags & pyroute2.netlink.rtnl.ifinfmsg.IFF_UP != 0
 
-class Interfaces:
+class Interfaces(dict):
     
     def __init__(self):
         # Race condition: open event monitor socket before doing initial scans.
@@ -562,8 +564,6 @@ class Interfaces:
         self.ip.bind(pyroute2.netlink.rtnl.RTNLGRP_LINK|
                      pyroute2.netlink.rtnl.RTNLGRP_IPV4_IFADDR|
                      pyroute2.netlink.rtnl.RTNLGRP_IPV4_IFADDR)
-        self.ifnames = {}
-        self.ifindex = {}
         with pyroute2.IPRoute() as ipr:
             for msg in ipr.get_links():
                 iface = Interface(
@@ -571,25 +571,25 @@ class Interfaces:
                     flags   = msg["flags"],
                     name    = msg.get_attr("IFLA_IFNAME"),
                     macaddr = msg.get_attr("IFLA_ADDRESS"))
-                self.ifindex[iface.index] = iface
-                self.ifnames[iface.name]  = iface
+                self[iface.index] = iface
+                self[iface.name]  = iface
             for msg in ipr.get_addr():
-                self.ifindex[msg["index"]].add_ipaddr(
+                self[msg["index"]].add_ipaddr(
                     family = msg["family"],
                     ipaddr = msg.get_attr("IFA_ADDRESS"))
-            tornado.ioloop.IOLoop.current().add_handler(
-                self.ip.fileno(), self._handle_event, tornado.ioloop.IOLoop.READ)
+        tornado.ioloop.IOLoop.current().add_handler(
+            self.ip.fileno(), self._handle_event, tornado.ioloop.IOLoop.READ)
 
-        def _handle_event(self, *ignored):
-            for msg in ip.get():
-                if msg["event"] == "RTM_NEWLINK":
-                    ifindex[msg["index"]].update_flags(msg["flags"])
-                elif msg["event"] == "RTM_NEWADDR":
-                    ifindex[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
-                elif msg["event"] == "RTM_DELADDR":
-                    ifindex[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
-                else:
-                    print("WTF: {} event".format(msg["event"]))
+    def _handle_event(self, *ignored):
+        for msg in ip.get():
+            if msg["event"] == "RTM_NEWLINK":
+                self[msg["index"]].update_flags(msg["flags"])
+            elif msg["event"] == "RTM_NEWADDR":
+                self[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+            elif msg["event"] == "RTM_DELADDR":
+                self[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+            else:
+                print("WTF: {} event".format(msg["event"]))
 
 
 
@@ -601,10 +601,11 @@ class Session:
 
     # Unclear what (if anything) needs to be a coroutine here.
 
-    def __init__(self, io, ifs, macaddr):
+    def __init__(self, io, ifs, macaddr, ifname):
         self.io = io
         self.ifs = ifs
         self.macaddr = macaddr
+        self.ifname  = ifname
         self.is_open = False
         self.dispatch = {}
         self.rxq = {}
@@ -731,31 +732,53 @@ class Session:
 # better idiom would be to leave Main.__init__() undefined and instead
 # have a coroutine Main.main()
 
+# Need to do something (here or in a timer callback) to send
+# HELLO on every interface, or maybe all configured
+# interfaces, or intersection of configured and detected
+# interfaces, or ... but in any case we need to send some.
+#
+# Might want to do that in a separate pseudo-thread.
+#
+# Might want main() to just initialise shared data structures
+# and task pseudo-threads then wait them to exit.
+#
+# main() might want to be a class to simplify shared data.
+#
+# Need something here to gc dead sessions?
 
-@tornado.gen.coroutine
-def main():
+class Main:
 
-    # Probably ought to be reading config file before doing anything else
+    @tornado.gen.coroutine
+    def main(self):
 
-    sessions = {}
-    ifs = Interfaces()
-    io  = EtherIO()
-    while True:
-        msg, macaddr = yield io.read()
-        if macaddr not in sessions:
-            sessions[macaddr] = Session(io, ifs, macaddr)
-        sessions[macaddr].recv(msg)
+        # Probably ought to be reading config file before doing anything else
 
-        # Need to do something (here or in a timer callback) to send
-        # HELLO on every interface, or maybe all configured
-        # interfaces, or intersection of configured and detected
-        # interfaces, or ... but in any case we need to send some.
-        #
-        # Might want to do that in a separate pseudo-thread.
-        #
-        # Might want main() to just initialise shared data structures
-        # and task pseudo-threads then wait them to exit.
-        #
-        # main() might want to be a class to simplify shared data.
-        #
-        # Need something here to gc dead sessions?
+        self.sessions = {}
+        self.ifs = Interfaces()
+        self.io  = EtherIO()
+
+    @tornado.gen.coroutine
+    def receiver(self):
+        while True:
+            msg, macaddr, ifname = yield self.io.read()
+            if macaddr not in self.sessions:
+                self.sessions[macaddr] = Session(self.io, self.ifs, macaddr, ifname)
+            self.sessions[macaddr].recv(msg)
+
+    @tornado.gen.coroutine
+    def beacon(self):
+        # Beacon Hello PDUs
+        raise NotImplementedError
+
+    @tornado.gen.coroutine
+    def timers(self):
+        # Handle timers, perhaps with an Event object and timeout
+        raise NotImplementedError
+
+
+if __name__ == "__main__":
+    try:
+        tornado.ioloop.IOLoop.current().run_sync(Main().main)
+    except:
+        logger.exception("Unhandled exception")
+        sys.exit(1)
