@@ -3,6 +3,70 @@ LSOE
 
 Initial fumblings towards implementation of LSOE in Python.
 
+Config
+------
+
+Initial code hard wires some constants, need to fix that.  Config
+language either YAML or `.ini` file (using whatever `ConfigParser`
+turned into in Python3).  Want comments in any case so not JSON.
+
+Spec says "blah blah is configurable", do a sweep for that sort of
+thing.  If go with YAML will probably want some `LazyDict` abstraction
+that lets us use attributes instead of ten zillion `['foo']` instances.
+
+Timers
+------
+
+Things that need timers (probably Tornado-based at least for now, but
+I haven't yet figured out exactly how these slot into the data
+structure architecture):
+
+* HelloPDU beacon timer (global)
+* KeepAlivePDU beacon timer (sending side, per session)
+* Too long since last KeepAlivePDU (receiving side, per session)
+* Retransmission timer(s?) (per session? per session*PDU_type?  multiplex?)
+
+Callbacks or `@coroutine` loops in daemon pseudo-threads?  Think about
+traceback context before jumping to conclusions here.
+
+If pseudo-threads, are any of the usual thread synchronization
+mechanisms useful here?  Queues?  Conditions?
+
+Think about session close and teardown (separate things) too.
+
+Still a bit confused about how this should work, but perhaps we could
+use an `Event` with timeout.  Implemented slightly differently in
+`asyncio` and Tornado but same basic mechanisms exist:
+`tornado.locks.Event.wait(timeout = None)` vs 
+`asyncio.wait_for(event.wait(), timeout)`.
+
+General idea:
+
+When we instantiate a Session, we create an `Event` object and start a
+coroutine (call it `.sched()` for now).  `.sched()` runs an infinite
+loop, running through a sequence of things it knows need timestamps
+checked, performing actions (eg, sending packets), checking for things
+which have timed out, and collecting information on when its next
+wakeup should be.  When it's gone through its set of actions, it waits
+on the `Event`, using the timeout it calculated, so it will wait until
+kicked externally via the `Event` or until the timeout expires.
+Either way, it wakes up and does it again.
+
+`.sched()` should exit when `Session` is being shut down, or maybe
+when closed (in which case we'd be starting `.sched()` when we start
+trying to open or something).  `.sched()` would also need to be able
+to trigger session close on various timeout events.
+
+Remains the question: who awaits the `Future` returned by the
+`.sched()` co-routine?  In Tornado, we could use the spawn mechanism,
+haven't found equivalent in `asyncio`.  Well , maybe:
+
+https://stackoverflow.com/questions/37278647/fire-and-forget-python-async-await
+
+
+Implementation environment
+--------------------------
+
 Probably needs to be Python 3 at this point.
 
 Will probably use Tornado initially so don't have to learn entire

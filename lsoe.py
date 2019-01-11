@@ -78,7 +78,7 @@ logger = logging.getLogger(os.path.splitext(os.path.basename(sys.argv[0]))[0])
 # Transport layer
 #
 
-class Datagram(object):
+class Datagram:
     """
     LSOE transport protocol datagram.
     """
@@ -184,7 +184,7 @@ class Datagram(object):
     def payload(self):
         return self.bytes[self.h.size : self.h.size + self.length]
 
-class EtherIO(object):
+class EtherIO:
     """
     LSOE transport protocol implementation.  Uses Tornado to read and
     write from a PF_PACKET datagram socket.  Handles fragmentation,
@@ -194,7 +194,7 @@ class EtherIO(object):
     .close() methods, everything else is internal to the engine.
     """
 
-    class MACAddr(object):
+    class MACAddr:
         def __init__(self, macaddr, ifname):
             self.macaddr = macaddr
             self.ifname = ifname
@@ -216,9 +216,9 @@ class EtherIO(object):
     def read(self):
         return self.q.get()
 
-    # Breaks bytes into datagrams and sends them
-    def write(self, b, macaddr):
-        for d in Datagram.split_message(b, macaddr, self.macaddrs[macaddr].ifname):
+    # Convert PDU to bytes, breaks into datagrams, and sends them
+    def write(self, pdu, macaddr):
+        for d in Datagram.split_message(bytes(pdu), macaddr, self.macaddrs[macaddr].ifname):
             self.s.sendto(d.bytes, d.sa_ll)
 
     # Tears down I/O
@@ -278,7 +278,7 @@ class EtherIO(object):
 # Presentation layer: Encapsulations
 #
 
-class Encapsulation(object):
+class Encapsulation:
 
     _primary_flag  = 0x80
     _loopback_flag = 0x40
@@ -374,7 +374,7 @@ def register_pdu(cls):
 class PDUParseError(Exception):
     "Error parsing LSOE PDU."
 
-class PDU(object):
+class PDU:
     """
     Abstract base class for PDUs.
     """
@@ -422,17 +422,6 @@ class HelloPDU(PDU):
 @register_pdu
 class OpenPDU(PDU):
 
-    # Implementation issues:
-    #
-    # For now, we assume and require Authentication Data to be empty,
-    # because the specification on what should go there isn't done.
-    #
-    # We treat the open nonce as a four byte string, because that
-    # works well with os.urandom(); if we were using int(time.time())
-    # as our nonce source, we'd represent nonces as single 32-bit
-    # unsigned integers instead.  Behavior on the wire is the same in
-    # either case, 32 bits of nobody else's business.
-
     pdu_type = 1
 
     h1 = struct.Struct("4s10s10spH")
@@ -442,6 +431,7 @@ class OpenPDU(PDU):
         if b is not None:
             self.nonce, self.local_id, self.remote_id, self.attributes, self.auth_length = self.h1.unpack(b)
             if self.auth_length != 0:
+                # Implementation restriction until LSOE signature spec written
                 raise PDUParserError
 
     def __bytes__(self):
@@ -477,12 +467,12 @@ class ACKPDU(PDU):
 
     pdu_type = 3
 
-    h1 = struct.Struct("BL")
+    h1 = struct.Struct("B")
 
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            acked_type, self.acked_number = self.h1.unpack(b)
+            acked_type, = self.h1.unpack(b)
             try:
                 self.acked_type = self.pdu_type_map[acked_type]
             except:
@@ -492,7 +482,7 @@ class ACKPDU(PDU):
 
     def __bytes__(self):
         assert issubclass(self.acked_type, (OpenPDU, EncapsulationPDU))
-        return self._b(self.h1.pack(self.acked_type.pdu_type, self.acked_number))
+        return self._b(self.h1.pack(self.acked_type.pdu_type))
 
 class EncapsulationPDU(PDU):
 
@@ -539,7 +529,7 @@ class MPLSIPv6EncapsulationPDU(PDU):
 # Network interface status and monitoring.
 #
 
-class Interface(object):
+class Interface:
 
     def __init__(self, index, name, macaddr, flags):
         self.index   = index
@@ -564,7 +554,7 @@ class Interface(object):
         # Add other flags as needed, eg, IFF_LOWER_UP
         return self.flags & pyroute2.netlink.rtnl.ifinfmsg.IFF_UP != 0
 
-class Interfaces(object):
+class Interfaces:
     
     def __init__(self):
         # Race condition: open event monitor socket before doing initial scans.
@@ -607,7 +597,7 @@ class Interfaces(object):
 # Session layer
 #
 
-class Session(object):
+class Session:
 
     # Unclear what (if anything) needs to be a coroutine here.
 
@@ -657,7 +647,7 @@ class Session(object):
             self.close()
         self.peer_open_nonce = pdu.nonce
         self.send_ack(pdu)
-        self.send_open_maybe()
+        self.send_open_maybe(remote_id = pdu.local_id)
 
     def handle_KeepAlivePDU(self, pdu):
         if not self.is_open:
@@ -677,8 +667,8 @@ class Session(object):
         if isinstance(pdu, OpenPDU):
             assert not self.rxq[pdu.pdu_type]
             self.our_open_acked = True
-        elif self.rxq[pdu.pdu_type]:
-            self.xmit_next_pdu(pdu.pdu_type)
+        else:
+            self.send_pdu(pdu.pdu_type)
 
     def handle_encapsulation(self, pdu):
         if not self.is_open:
@@ -699,13 +689,31 @@ class Session(object):
     def handle_MPLSIPv6EncapsulationPDU(self, pdu):
         self.handle_encapsulation(pdu)
 
-    def send_open_maybe(self, pdu):
+    def send_open_maybe(self, remote_id = bytes(0 for i in range(10)), attributes = b""):
         if self.our_open_acked or self.rxq[OpenPDU.pdu_type]:
             return
-        raise NotImplementedError
+        self.send_pdu(OpenPDU(local_id = self.local_id, remote_id = remote_id, attributes = attributes))
 
     def send_ack(self, pdu):
-        raise NotImplementedError
+        self.io.write(ACKPDU(acked_type = type(pdu)), self.macaddr)
+
+    # Approximately .25 baked.
+
+    def send_pdu(self, pdu_or_type):
+        is_pdu = isinstance(pdu_or_type, PDU)
+        pdu_type = pdu_or_type.pdu_type if is_pdu else pdu_or_type
+        idle = not self.rxq[pdu_type]
+        if is_pdu:
+            self.rxq[pdu_type].append(pdu_or_type)
+            send_now = idle
+        else:
+            send_now = not idle
+        if send_now:
+            # Adjust retransmission timers, counters, ..., then
+            self.io.write(self.rxq[pdu_type], self.macaddr)
+
+    # Also need something to handle timeouts.  In Tornado that'd be
+    # something coming off the IOLoop.
 
 
 
@@ -714,6 +722,15 @@ class Session(object):
 #
 
 # This is not even close to stable yet
+
+# Probably premature to assume that main() is just the receive loop.
+# More likely, main is a class and its .__init__() spawns several
+# loops: the receive loop, a HelloPDU sending loop, possibly a timeout
+# loop which runs over all sessions or something like that.  Or, since
+# we probably can't have a coroutine .__init__() method, perhaps a
+# better idiom would be to leave Main.__init__() undefined and instead
+# have a coroutine Main.main()
+
 
 @tornado.gen.coroutine
 def main():
