@@ -203,45 +203,6 @@ messages we actually want.  Maybe pyroute2 makes this easier than
 libnl did?  We'll see.  Probably start with an event dumper and go
 from there.
 
-There's something seriously weird going on with the PyRoute2
-monitoring code.  It uses the old bit-mask API rather than the newer
-`.add_membership()` / `.drop_membership()` API (see
-<http://www.infradead.org/~tgr/libnl/doc/core.html#core_sk_multicast>),
-which is a bit crufty but probably OK.  Obvious mask is:
-
-```RTNLGRP_IPV4_IFADDR | RTNLGRP_IPV6_IFADDR | RTNLGRP_LINK```
-
-which works for everything we want -- except IPv6 `RTM_NEWADDR`, which
-we don't seem to get.  We can see route additions and deletions if we add
-
-```RTNLGRP_IPV4_ROUTE | RTNLGRP_IPV6_ROUTE```
-
-to the mix, but there's no interface index on route events so even if
-we could tell that these are zeroth hop routes, this wouldn't help.
-
-We get this behavior with both stock Jessie kernel and 4.14.
-
-Only thing I can think of at the moment is to treat the routing events
-as a triger to scan all interface addresses again.  Nasty, but would
-probably work.
-
-Question is whether this is kernel weridness or PyRoute2 weirdness.
-Not obvious how PyRoute2 would be breaking this, but could test
-against Python libnl for sanity check.  Slightly more likely is that
-the old bitmap API is starting to turn into cottage cheese and we'd
-get better results with the add/drop API, but while PyRoute2 does
-define methods for that, they're not on the socket-like objects we
-use.  So all is chaos.
-
-Well, the base pyroute2 socket-ish objects we're using do support
-`.setsockopt()`, so in theory we could do
-
-```.setsockopt(SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, ...)```
-
-if only we knew what to do for `...` -- which looks like the same
-constants we're currently using in the bitmask, which suggests that
-this may be pointless.
-
 * * * 
 
 Current state and next steps

@@ -30,15 +30,28 @@ class Interface(object):
         self.flags   = flags
         self.ipaddrs = {}
 
+    def __eq__(self, other):
+        return  self.index   == other.index   \
+            and self.name    == other.name    \
+            and self.macaddr == other.macaddr \
+            and self.flags   == other.flags   \
+            and self.ipaddrs == other.ipaddrs
+
+    def __str__(self):
+        s = "Interface {0.name} (#{0.index}) link {0.macaddr} flags {0.flagtext}\n".format(self)
+        for family in sorted(self.ipaddrs):
+            s += "  Address family {} (#{}):\n".format(afname.get(family, "???"), family)
+            for ipaddr in self.ipaddrs[family]:
+                s += "    {}\n".format(ipaddr)
+        return s
+
     def add_ipaddr(self, family, ipaddr):
         if family not in self.ipaddrs:
             self.ipaddrs[family] = []
         self.ipaddrs[family].append(ipaddr)
-        print("Interface {} add {}".format(self.name, ipaddr))
 
     def del_ipaddr(self, family, ipaddr):
         self.ipaddrs[family].remove(ipaddr)
-        print("Interface {} del {}".format(self.name, ipaddr))
 
     @property
     def flagtext(self):
@@ -46,16 +59,26 @@ class Interface(object):
             sorted(n for (n, f) in iface_flags.items() if f & self.flags != 0)))
 
     def update_flags(self, flags):
-        old_flags = self.flagtext
         self.flags = flags
-        print("Interface {} flags {} => {}".format(self.name, old_flags, self.flagtext))
 
-    def show(self):
-        print("Interface {0.name} (#{0.index}) link {0.macaddr} flags {0.flagtext}".format(self))
-        for family in sorted(self.ipaddrs):
-            print("  Address family {} (#{}):".format(afname.get(family, "???"), family))
-            for ipaddr in self.ipaddrs[family]:
-                print("    {}".format(ipaddr))
+class Interfaces(dict):
+
+    def __init__(self):
+        with pyroute2.IPRoute() as ipr:
+            for x in ipr.get_links():
+                iface = Interface(
+                    index   = x["index"],
+                    flags   = x["flags"],
+                    name    = x.get_attr("IFLA_IFNAME"),
+                    macaddr = x.get_attr("IFLA_ADDRESS"))
+                self[iface.index] = iface
+            for x in ipr.get_addr():
+                self[x["index"]].add_ipaddr(
+                    family = x["family"],
+                    ipaddr = x.get_attr("IFA_ADDRESS"))
+
+    def __str__(self):
+        return "\n".join(str(self[i]) for i in sorted(self)) + "\n\n"
 
 # Race condition: open event monitor socket before doing initial scans.
 # Unlikely to matter in toy demo but on busy switch it might
@@ -63,39 +86,22 @@ class Interface(object):
 ip = pyroute2.RawIPRoute()
 ip.bind(pyroute2.netlink.rtnl.RTNLGRP_LINK|
         pyroute2.netlink.rtnl.RTNLGRP_IPV4_IFADDR|
-        pyroute2.netlink.rtnl.RTNLGRP_IPV6_IFADDR)
+        pyroute2.netlink.rtnl.RTNLGRP_IPV6_IFADDR|
+        pyroute2.netlink.rtnl.RTNLGRP_IPV4_ROUTE|
+        pyroute2.netlink.rtnl.RTNLGRP_IPV6_ROUTE)
 
-ifnames = {}
-ifindex = {}
+ifs = Interfaces()
 
-with pyroute2.IPRoute() as ipr:
-    for x in ipr.get_links():
-        iface = Interface(
-            index   = x["index"],
-            flags   = x["flags"],
-            name    = x.get_attr("IFLA_IFNAME"),
-            macaddr = x.get_attr("IFLA_ADDRESS"))
-        ifindex[iface.index] = iface
-        ifnames[iface.name]  = iface
-    for x in ipr.get_addr():
-        ifindex[x["index"]].add_ipaddr(
-            family = x["family"],
-            ipaddr = x.get_attr("IFA_ADDRESS"))
-
-for i in sorted(ifindex):
-    ifindex[i].show()
-    print()
+print(ifs)
 
 def handle_event(*ignored):
     for msg in ip.get():
-        if msg["event"] == "RTM_NEWLINK":
-            ifindex[msg["index"]].update_flags(msg["flags"])
-        elif msg["event"] == "RTM_NEWADDR":
-            ifindex[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
-        elif msg["event"] == "RTM_DELADDR":
-            ifindex[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
-        else:
-            print("WTF: {} event".format(msg["event"]))
+        pass
+    global ifs
+    new = Interfaces()
+    if ifs != new:
+        ifs = new
+        print(ifs)
 
 ioloop = tornado.ioloop.IOLoop.current()
 ioloop.add_handler(ip.fileno(), handle_event, tornado.ioloop.IOLoop.READ)

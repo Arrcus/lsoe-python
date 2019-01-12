@@ -533,6 +533,38 @@ class MPLSIPv6EncapsulationPDU(PDU):
 # Network interface status and monitoring.
 #
 
+# May need to add a Queue to Interfaces class into which we drop some
+# kind of object describing each change, so that Session or Main can
+# generate encap messages based on objects pulled from that queue.  Or
+# something.  Each encap message is a total replacement, and we need
+# to think about session restarts.
+#
+# So maybe we just need a method to generate a new encapsulation
+# PDU from the internal database, which we then run at the end of
+# both .__init__() and ._handle_event() to drop one or more encap
+# PDUs based on current internal database content?  Would rather
+# not send encap that duplicates what we just sent, but maybe
+# defer that as premature optimization.  Still have to think about
+# session restarts.
+#
+# Do we send the same encapsulation PDU to each neighbor?  If
+# we're storing .send_pdu() timeouts and counters in the PDU
+# object we're going to need separate copies for each session.
+#
+# So we need a current set of encap PDUs (all encapsulations we
+# support) when we start a new session, and we need copies of a
+# changed encapsulation PDU for each live session when something
+# changes.  Probably best to leave copying in latter case for
+# Main/Session layer since we have no idea how many sesions here,
+# but only we know when something changed so we have to initiate.
+# Only Main/Session knows when we have new or restart session, so
+# it has to initiate.  So I guess ._handle_event() has to push,
+# and Main/Session has to pull.
+
+# May want to back out using Interfaces self[] for both .ifindex[] and
+# .ifnames[], it's cute but annoying to iterate.  Guess it depends on
+# whether lookup or iteration is the common operation.
+
 class Interface:
 
     def __init__(self, index, name, macaddr, flags):
@@ -560,23 +592,12 @@ class Interface:
 
 class Interfaces(dict):
     
-    # May need to add a Queue here into which we drop some kind of
-    # object describing each change, so that Session or Main can
-    # generate encap messages based on objects pulled from that queue.
-    # Or something.  Randy says each encap message is a total
-    # replacement, and we need to think about session restarts, so
-    # need a bit more thought about what we should be generating here.
-
-    # May want to back out using self[] for both .ifindex[] and
-    # .ifnames[], cute but annoying to iterate.  Guess it depends on
-    # whether lookup or iteration is the common operation.
-
     def __init__(self):
         # Race condition: open event monitor socket before doing initial scans.
         self.ip = pyroute2.RawIPRoute()
         self.ip.bind(pyroute2.netlink.rtnl.RTNLGRP_LINK|
                      pyroute2.netlink.rtnl.RTNLGRP_IPV4_IFADDR|
-                     pyroute2.netlink.rtnl.RTNLGRP_IPV4_IFADDR)
+                     pyroute2.netlink.rtnl.RTNLGRP_IPV6_IFADDR)
         with pyroute2.IPRoute() as ipr:
             for msg in ipr.get_links():
                 iface = Interface(
@@ -602,7 +623,7 @@ class Interfaces(dict):
             elif msg["event"] == "RTM_DELADDR":
                 self[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
             else:
-                print("WTF: {} event".format(msg["event"]))
+                logger.debug("pyroute2 WTF: %s event", msg["event"])
 
 
 
