@@ -30,15 +30,15 @@ class Interface(object):
         self.flags   = flags
         self.ipaddrs = {}
 
-    def add_ipaddr(self, family, ipaddr):
+    def add_ipaddr(self, family, ipaddr, prefixlen):
         if family not in self.ipaddrs:
             self.ipaddrs[family] = []
-        self.ipaddrs[family].append(ipaddr)
-        print("Interface {} add {}".format(self.name, ipaddr))
+        self.ipaddrs[family].append((ipaddr, prefixlen))
+        print("Interface {} add {}/{}".format(self.name, ipaddr, prefixlen))
 
-    def del_ipaddr(self, family, ipaddr):
-        self.ipaddrs[family].remove(ipaddr)
-        print("Interface {} del {}".format(self.name, ipaddr))
+    def del_ipaddr(self, family, ipaddr, prefixlen):
+        self.ipaddrs[family].remove((ipaddr, prefixlen))
+        print("Interface {} del {}/{}".format(self.name, ipaddr, prefixlen))
 
     @property
     def flagtext(self):
@@ -54,8 +54,8 @@ class Interface(object):
         print("Interface {0.name} (#{0.index}) link {0.macaddr} flags {0.flagtext}".format(self))
         for family in sorted(self.ipaddrs):
             print("  Address family {} (#{}):".format(afname.get(family, "???"), family))
-            for ipaddr in self.ipaddrs[family]:
-                print("    {}".format(ipaddr))
+            for ipaddr, prefixlen in self.ipaddrs[family]:
+                print("    {}/{}".format(ipaddr, prefixlen))
 
 # Race condition: open event monitor socket before doing initial scans.
 # Unlikely to matter in toy demo but on busy switch it might
@@ -80,7 +80,8 @@ with pyroute2.IPRoute() as ipr:
     for x in ipr.get_addr():
         ifindex[x["index"]].add_ipaddr(
             family = x["family"],
-            ipaddr = x.get_attr("IFA_ADDRESS"))
+            ipaddr = x.get_attr("IFA_ADDRESS"),
+            prefixlen = x["prefixlen"])
 
 for i in sorted(ifindex):
     ifindex[i].show()
@@ -88,12 +89,13 @@ for i in sorted(ifindex):
 
 def handle_event(*ignored):
     for msg in ip.get():
+        #print("+ {}".format(json.dumps(msg, indent = 4, sort_keys = True)))
         if msg["event"] == "RTM_NEWLINK":
             ifindex[msg["index"]].update_flags(msg["flags"])
         elif msg["event"] == "RTM_NEWADDR":
-            ifindex[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+            ifindex[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"), msg["prefixlen"])
         elif msg["event"] == "RTM_DELADDR":
-            ifindex[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+            ifindex[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"), msg["prefixlen"])
         else:
             print("WTF: {} event".format(msg["event"]))
 

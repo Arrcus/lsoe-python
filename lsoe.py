@@ -310,9 +310,15 @@ class Encapsulation:
         else:
             self.flags &= ~self._loopback_flag
 
+    def _kwset(self, b, offset, kwargs):
+        assert (b is None and offset is None) or not kwargs
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
 class IPEncapsulation(Encapsulation):
 
     def __init__(self, b = None, offset = None):
+        self._kwset(b, offset)
         if b is not None:
             self.flags, self.ipaddr, self.prefixlen = self.h1.unpack_from(b, offset)
 
@@ -332,6 +338,7 @@ class MPLSIPEncapsulation(Encapsulation):
 
     def __init__(self, b = None, offset = None):
         self.labels = []
+        self._kwset(b, offset)
         if b is not None:
             self.flags, label_count = self.h1.unpack_from(b, offset)
             offset += self.h1.size
@@ -574,13 +581,13 @@ class Interface:
         self.flags   = flags
         self.ipaddrs = {}
 
-    def add_ipaddr(self, family, ipaddr):
+    def add_ipaddr(self, family, ipaddr, prefixlen):
         if family not in self.ipaddrs:
             self.ipaddrs[family] = []
-        self.ipaddrs[family].append(ipaddr)
+        self.ipaddrs[family].append((ipaddr, prefixlen))
 
-    def del_ipaddr(self, family, ipaddr):
-        self.ipaddrs[family].remove(ipaddr)
+    def del_ipaddr(self, family, ipaddr, prefixlen):
+        self.ipaddrs[family].remove((ipaddr, prefixlen))
 
     def update_flags(self, flags):
         self.flags = flags
@@ -607,11 +614,11 @@ class Interfaces(dict):
                     name    = msg.get_attr("IFLA_IFNAME"),
                     macaddr = msg.get_attr("IFLA_ADDRESS"))
                 self[iface.index] = iface
-                self[iface.name]  = iface
             for msg in ipr.get_addr():
                 self[msg["index"]].add_ipaddr(
                     family = msg["family"],
-                    ipaddr = msg.get_attr("IFA_ADDRESS"))
+                    ipaddr = msg.get_attr("IFA_ADDRESS"),
+                    prefixlen = msg["prefixlen"])
         tornado.ioloop.IOLoop.current().add_handler(
             self.ip.fileno(), self._handle_event, tornado.ioloop.IOLoop.READ)
 
@@ -624,10 +631,10 @@ class Interfaces(dict):
                 self[msg["index"]].update_flags(msg["flags"])
                 changed.add(True)
             elif msg["event"] == "RTM_NEWADDR":
-                self[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+                self[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"), prefixlen = msg["prefixlen"])
                 changed.add(msg["family"])
             elif msg["event"] == "RTM_DELADDR":
-                self[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+                self[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"), prefixlen = msg["prefixlen"])
                 changed.add(msg["family"])
             else:
                 logger.debug("pyroute2 WTF: %s event", msg["event"])
@@ -642,17 +649,30 @@ class Interfaces(dict):
                 self._get_MPLSIPv4EncapsulationPDU(),
                 self._get_MPLSIPv6EncapsulationPDU())
 
-    def _get_IPV4Encapsulation(self):
-        raise NotImplementedError
+    def _get_IPEncapsulationPDU(self, af, cls):
+        pdu = cls()
+        for i in self.itervalues():
+            for a, p in i.ipaddrs[af]:
+                pdu.encaps.append(cls.encap_type(
+                    primary = False, # No idea whence we get this, config maybe?
+                    loopback = i.flags & IFF_LOOPBACK, # Until we have a better theory
+                    ipaddr = a,
+                    prefixlen = p))
+        return pdu
 
-    def _get_IPV6Encapsulation(self):
-        raise NotImplementedError
+    def _get_IPV4EncapsulationPDU(self):
+        return self._get_IPEncapsulationPDU(socket.AF_INET,  IPV4EncapsulationPDU)
+
+    def _get_IPV6EncapsulationPDU(self):
+        return self._get_IPEncapsulationPDU(socket.AF_INET6, IPV6EncapsulationPDU)
+
+    # Implementation restriction: we don't support MPLS yet, so only empty MPLS encapsulations
 
     def _get_MPLSIPv4EncapsulationPDU(self):
-        raise NotImplementedError
+        return MPLSIPv4EncapsulationPDU()
 
     def _get_MPLSIPv6EncapsulationPDU(self):
-        raise NotImplementedError
+        return MPLSIPv6EncapsulationPDU()
 
 
 
