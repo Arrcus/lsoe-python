@@ -83,6 +83,9 @@ def`, `asyncio`, etc) look fairly plausible, but were new in Python
 3.5.  Our initial target is Debian Jessie, which is Python 3.4, so we
 may be sticking with Tornado for a while.
 
+PF_PACKET sockets
+-----------------
+
 Raw ethernet frame socket I/O is not well documented, see Linux
 packet(7) for what doc there is.
 
@@ -115,6 +118,9 @@ the `PyArg_ParseTuple()` format is concerned, but since we do need to
 specify the MAC address, which is the last element of the tuple, we
 also need to specify the two zeroed fields.
 
+Ethertypes
+----------
+
 IEEE considers EtherTypes to be a scarce resource, so they allocated
 some playground space for development and private protocols:
 
@@ -124,51 +130,9 @@ Local Experimental EtherType 1  | 88-B5
 Local Experimental EtherType 2  | 88-B6
 OUI Extended EtherType          | 88-B7
 
+Decorator ordering
+------------------
 
-Other fun implementation stuff
-------------------------------
-
-The similarity between the Python 3 `byte` and `bytearray` types may
-allow us to do something cut with the Frame and Message classes: use
-`byte` for received messages, `bytearray` for messages we're
-composing, and we automatically get the check for the writable
-operations only applying to stuff we're composing.
-
-Per discussion with Randy just now: checksums are over the frame
-payload not over the message (ie, text in 5.2.1 is wrong here).  In
-SLSOE the signature will be over the message with all the checksum
-fields zeroed, so we're still checksuming the frames rather than
-signing the checksums or leaving the checksum blank on the last frame
-or ....
-
-In -02 the frames within a message do have sequence numbers.  Messages
-do not have sequence numbers in -02, protocol pretty much assumes
-lock-step for everything where that might matter.
-
-At this point I may have sold Randy on separating the transport
-framing from the application message.  What I'm looking for is very
-UDP-like, except that I also want the fragmentation mangement at this
-layer.  So basically a combination of IPv4 fragments and UDP.  Payload
-inside this transport layer is just bytes as far as the transport is
-concerned; application messages look very BGP-like.
-
-For some reason I'm thinking of NETBLT and VMTP, but probably way over
-the top.
-
-Possible transport header:
-
-    0                   1                   2                   3
-    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |    Version    |L| PDU Number  |           PDU Length          |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |                            Checksum                           |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-Where L flags that this is the last PDU (frame) in a message.  So a
-single-frame message would have L = 1, PDU Number = 0.
-
-Decorator ordering:
 https://stackoverflow.com/questions/37119652/python-tornado-call-to-classmethod#37127703
 says that `@classmethod` (or `@staticmethod`) must be the outermost
 decorator, which sort of makes sense, so decorator ordering would be:
@@ -180,6 +144,9 @@ decorator, which sort of makes sense, so decorator ordering would be:
 	def foo(cls, fee, fie, foe, fum):
 	    yield do_something_interesting()
 ```
+
+Interfaces and pyroute2
+-----------------------
 
 So it looks like we really do need to use pyroute2, not just because
 screen scraping output from `ip addr list` is nasty, but because we
@@ -203,18 +170,11 @@ messages we actually want.  Maybe pyroute2 makes this easier than
 libnl did?  We'll see.  Probably start with an event dumper and go
 from there.
 
-* * * 
+MPLS
+----
 
-Current state and next steps
-----------------------------
+Apparently there's some MPLS support in recent versions of pyroute2:
+https://docs.pyroute2.org/mpls.html
 
-So we have:
-
-* Ethernet I/O code
-* Interface/address monitoring code
-* Presentation layer
-
-Still needed:
-
-* Protocol itself (state machine, ...)
-* Upwards API to BGP*
+But of course Jessie is too old.  Not like I have enough MPLS clue at
+the moment to be messing with this in any case.
