@@ -593,6 +593,7 @@ class Interface:
 class Interfaces(dict):
     
     def __init__(self):
+        self.q = tornado.queues.Queue()
         # Race condition: open event monitor socket before doing initial scans.
         self.ip = pyroute2.RawIPRoute()
         self.ip.bind(pyroute2.netlink.rtnl.RTNLGRP_LINK|
@@ -614,16 +615,44 @@ class Interfaces(dict):
         tornado.ioloop.IOLoop.current().add_handler(
             self.ip.fileno(), self._handle_event, tornado.ioloop.IOLoop.READ)
 
+    # Doc sketchy on RTM_DELLINK, may need to experiment
+
     def _handle_event(self, *ignored):
+        changed = set()
         for msg in ip.get():
-            if msg["event"] == "RTM_NEWLINK":
+            if msg["event"] == "RTM_NEWLINK" or msg["event"] == "RTM_DELLINK":
                 self[msg["index"]].update_flags(msg["flags"])
+                changed.add(True)
             elif msg["event"] == "RTM_NEWADDR":
                 self[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+                changed.add(msg["family"])
             elif msg["event"] == "RTM_DELADDR":
                 self[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"))
+                changed.add(msg["family"])
             else:
                 logger.debug("pyroute2 WTF: %s event", msg["event"])
+        if changed & {True, socket.AF_INET}:
+            self.q.put_nowait(self._get_IPV4EncapsulationPDU())
+        if changed & {True, socket.AF_INET6}:
+            self.q.put_nowait(self._get_IPV6EncapsulationPDU())
+
+    def get_encapsulations(self):
+        return (self._get_IPV4EncapsulationPDU(),
+                self._get_IPV6EncapsulationPDU(),
+                self._get_MPLSIPv4EncapsulationPDU(),
+                self._get_MPLSIPv6EncapsulationPDU())
+
+    def _get_IPV4Encapsulation(self):
+        raise NotImplementedError
+
+    def _get_IPV6Encapsulation(self):
+        raise NotImplementedError
+
+    def _get_MPLSIPv4EncapsulationPDU(self):
+        raise NotImplementedError
+
+    def _get_MPLSIPv6EncapsulationPDU(self):
+        raise NotImplementedError
 
 
 
