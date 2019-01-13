@@ -790,7 +790,7 @@ class Session:
     def handle_MPLSIPv6EncapsulationPDU(self, pdu):
         self.handle_encapsulation(pdu)
 
-    def send_open_maybe(self, remote_id = bytes(0 for i in range(10)), attributes = b""):
+    def send_open_maybe(self, remote_id = b"\x00" * 10, attributes = b""):
         if self.our_open_acked or self.rxq[OpenPDU.pdu_type]:
             return
         self.send_pdu(OpenPDU(local_id = self.local_id, remote_id = remote_id, attributes = attributes))
@@ -834,14 +834,28 @@ class Session:
 default_config = '''\
 
 # Herein lies the default configuration values, expressed in the same syntax
-# as the (perhaps) optional configuration file.
+# as the optional(?) configuration file.  Supports ${foo} interpoplation.
+# All times are in seconds, as floats (so 0.1 is 100 milliseconds, etc).
 
 [lsoe]
 
-fee = blarg
-fie = ${fee}
-foe = ${fie}${fum}${fie}
-fum = yowza
+# How long to wait before first retransmission
+retransmit-initial-interval = 1.0
+
+# Exponential backoff enabled?
+retransmit-exponential-backoff = yes
+
+# Maximum number of retransmissions before considering session dead
+retransmit-max-drop = 3
+
+# How frequently to send keepalives, in seconds
+keepalive-send-interval = 1.0
+
+# How long without receiving keepalive before considering connection dead? (0 = "never")
+keepalive-receive-timeout = 60.0
+
+# How frequently to send Hello PDUs
+hello-interval = 60.0
 
 '''
 
@@ -880,7 +894,7 @@ class Main:
         while True:
             for i in self.ifs.values():
                 self.io.write(HelloPDU(my_macaddr = i.macaddr), LSOE_HELLO_MACADDR, i.name)
-            yield tornado.gen.sleep(self.cfg["hello_interval"])
+            yield tornado.gen.sleep(self.cfg.getfloat("hello-interval"))
 
     @tornado.gen.coroutine
     def timers(self):
