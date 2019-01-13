@@ -111,8 +111,8 @@ note that certain fields in the `sockaddr_ll` should be zero on send.
 If I'm reading this correctly, the zeroed fields are [2] and [3] in
 the Python interpretation.  Whether the Python code wants those as
 zero or just omits them...probably the former, but can read the
-_socket source code if necessary.  OK, I read the source code, and it
-looks like the sockaddr_ll component ordering is consistant between
+`_socket` source code if necessary.  OK, I read the source code, and it
+looks like the `sockaddr_ll` component ordering is consistant between
 read and write; when writing, the last three are optional as far as
 the `PyArg_ParseTuple()` format is concerned, but since we do need to
 specify the MAC address, which is the last element of the tuple, we
