@@ -178,3 +178,67 @@ https://docs.pyroute2.org/mpls.html
 
 But of course Jessie is too old.  Not like I have enough MPLS clue at
 the moment to be messing with this in any case.
+
+Multicast addresses
+-------------------
+
+> Date: Wed, 7 Nov 2018 21:25:58 -0800
+> From: Paul Congdon <paul.congdon@tallac.com>
+> To: randy@psg.com, sra@hactrn.net, keyur@arrcus.com
+> Cc: Mick Seaman <mickseaman@gmail.com>
+> Subject: Addressing and prototype protocol development for LSOE
+> 
+> This may or may not be useful, but IEEE 802 Overview and
+> Architecture specifies an Ethertype and header encapsulation
+> specific for prototype and vendor-specific protocol development.
+> The motivation was to develop protocols without using your final
+> assigned Ethertype in order to avoid interoperability issues if
+> these somehow get out into the wild.  It is specified in Clause
+> 9.2.2 of 802-2014 which you can freely download from the Get802
+> website:
+> https://ieeexplore.ieee.org/browse/standards/get-program/page/series?id=68
+> 
+> You mentioned that you will ultimately want 2 different multi-cast
+> addresses for LSOE to allow different 'reach' of the addresses; one
+> that will stop at a switch/bridge and another that will pass through
+> a switch.
+> 
+> For the one that will stop at a bridge, I would suggest that you use
+> one of the specified LLDP addresses.  Just make sure you use a
+> different Etherrtype (which could be the prototype development one
+> while you are under development).  The current LLDP addresses are
+> specified in Table 7-1 of LLDP (802.1AB) and are:
+> 
+> 01-80-C2-00-00-0E   Nearest Bridge = Propagation constrained to a
+>					  single physical link; stopped by all types of
+>					  bridges (including TMPRs (media converters)).
+>					  This is the default LLDP address
+>
+> 01-80-C2-00-00-03   Nearest non-TPMR Bridge = Propagation
+>					  constrained by all bridges other than TPMRs;
+>					  intended for use within provider bridged
+>					  networks
+>
+> 01-80-C2-00-00-00   Nearest Customer Bridge = Propagation
+>					  constrained by customer bridges, but passes
+>					  through TPMRs and S-VLAN provider bridges
+> 
+> Seems like the 01-80-C2-00-00-00 address might be the best choice
+> because it should pass through other stuff on the wire between your
+> routers, but I think there are some issues with legacy
+> implementations that didn't look at the Ethertype and just assumed
+> this was a Spanning Tree packet.  Those legacy environments are
+> probably not an issue in your deployments and it also is the reach
+> of the secure L2 (MacSec) protocols if those were to be of use for
+> you.  You could also go with 01-80-C2-00-00-0E which should be
+> pretty safe, but assumes you just have point-to-point Ethernet wires
+> between your routers..
+> 
+> As for the other multicast address, you probably just want to
+> allocate another EUI-48 Assignments under the IANA OUI as specified
+> in 2.1.1 of RFC 7042.  The current list of multicast addresses
+> already allocated can be seen here:
+> https://www.iana.org/assignments/ethernet-numbers/ethernet-numbers.xhtml#ethernet-numbers-1.
+> There should be no problem allocating another for your protocol.
+> 
+> Note I've copied Mick Seaman in case he has any further comments or suggestions
