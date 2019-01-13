@@ -55,6 +55,11 @@ ETH_P_IEEE_EXP2 = 0x8886        # "Local Experimental EtherType 2"
 
 ETH_P_LSOE      = ETH_P_IEEE_EXP1
 
+# MAC address to which we should send LSOE Hello PDUs.
+# Some archived email discussing this, I think.
+
+LSOE_HELLO_MACADDR = b""        # Figure out real value...
+
 # Linux PF_PACKET API constants from linux/if_packet.h.
 
 PACKET_HOST	 = 0
@@ -127,7 +132,7 @@ class Datagram:
             frag      = frag,
             length    = length,
             checksum  = checksum,
-            timestamp = time.time())
+            timestamp = tornado.ioloop.IOLoop.time())
 
     def verify(self):
         return self.version == LSOE_VERSION and \
@@ -243,7 +248,7 @@ class EtherIO:
         elif self.macaddrs[macaddr].ifname != sa_ll.ifname:
             # Should yell about MAC address appearing on wrong interface here
             return
-        self.macaddrs[sa_ll.macaddr].timestamp = time.time()
+        self.macaddrs[sa_ll.macaddr].timestamp = tornado.ioloop.IOLoop.time()
         d = Datagram.incoming(pkt, sa_ll)
         if not d.verify():
             return
@@ -264,14 +269,15 @@ class EtherIO:
 
     # Internal handler to garbage collect incomplete messages and stale MAC addresses
     def _gc(self):
-        threshold = time.time() - lsoe_msg_reassembly_timeout
+        now = tornado.ioloop.IOLoop.time()
+        threshold = now - lsoe_msg_reassembly_timeout
         for macaddr, rq in self.dgrams.items():
             rq.sort(key = lambda d: d.timestamp)
             while rq[0].timestamp < threshold:
                 del rq[0]
             if not rq:
                 del self.dgrams[macaddr]
-        threshold = time.time() - lsoe_macaddr_cache_timeout
+        threshold = now - lsoe_macaddr_cache_timeout
         for macaddr, m in self.macaddrs.items():
             if m.timestamp < threshold:
                 del self.macaddrs[macaddr]
@@ -515,22 +521,22 @@ class EncapsulationPDU(PDU):
         return self._b(self.h1.pack(len(self.encaps)) + b"".join(bytes(encap) for encap in self.encaps))
 
 @register_pdu
-class IPv4EncapsulationPDU(PDU):
+class IPv4EncapsulationPDU(EncapsulationPDU):
     pdu_type = 4
     encap_type = IPv4Encapsulation
 
 @register_pdu
-class IPv6EncapsulationPDU(PDU):
+class IPv6EncapsulationPDU(EncapsulationPDU):
     pdu_type = 5
     encap_type = IPv6Encapsulation
 
 @register_pdu
-class MPLSIPv4EncapsulationPDU(PDU):
+class MPLSIPv4EncapsulationPDU(EncapsulationPDU):
     pdu_type = 6
     encap_type = MPLSIPv4Encapsulation
 
 @register_pdu
-class MPLSIPv6EncapsulationPDU(PDU):
+class MPLSIPv6EncapsulationPDU(EncapsulationPDU):
     pdu_type = 7
     encap_type = MPLSIPv6Encapsulation
 
@@ -540,20 +546,6 @@ class MPLSIPv6EncapsulationPDU(PDU):
 # Network interface status and monitoring.
 #
 
-# May need to add a Queue to Interfaces class into which we drop some
-# kind of object describing each change, so that Session or Main can
-# generate encap messages based on objects pulled from that queue.  Or
-# something.  Each encap message is a total replacement, and we need
-# to think about session restarts.
-#
-# So maybe we just need a method to generate a new encapsulation
-# PDU from the internal database, which we then run at the end of
-# both .__init__() and ._handle_event() to drop one or more encap
-# PDUs based on current internal database content?  Would rather
-# not send encap that duplicates what we just sent, but maybe
-# defer that as premature optimization.  Still have to think about
-# session restarts.
-#
 # Do we send the same encapsulation PDU to each neighbor?  If
 # we're storing .send_pdu() timeouts and counters in the PDU
 # object we're going to need separate copies for each session.
@@ -567,10 +559,6 @@ class MPLSIPv6EncapsulationPDU(PDU):
 # Only Main/Session knows when we have new or restart session, so
 # it has to initiate.  So I guess ._handle_event() has to push,
 # and Main/Session has to pull.
-
-# May want to back out using Interfaces self[] for both .ifindex[] and
-# .ifnames[], it's cute but annoying to iterate.  Guess it depends on
-# whether lookup or iteration is the common operation.
 
 class Interface:
 
@@ -622,6 +610,10 @@ class Interfaces(dict):
         tornado.ioloop.IOLoop.current().add_handler(
             self.ip.fileno(), self._handle_event, tornado.ioloop.IOLoop.READ)
 
+    # Returns a Future, which returns an EncapsulationPDU
+    def read_updates(self):
+        return self.q.get()
+
     # Doc sketchy on RTM_DELLINK, may need to experiment
 
     def _handle_event(self, *ignored):
@@ -651,13 +643,14 @@ class Interfaces(dict):
 
     def _get_IPEncapsulationPDU(self, af, cls):
         pdu = cls()
-        for i in self.itervalues():
+        for i in self.values():
             for a, p in i.ipaddrs[af]:
+                # "primary" and "loopback" fields need work
                 pdu.encaps.append(cls.encap_type(
-                    primary = False, # No idea whence we get this, config maybe?
-                    loopback = i.flags & IFF_LOOPBACK, # Until we have a better theory
-                    ipaddr = a,
-                    prefixlen = p))
+                    primary = False,
+                    loopback = i.flags & IFF_LOOPBACK,
+                    ipaddr = socket.inet_pton(af, a),
+                    prefixlen = int(p)))
         return pdu
 
     def _get_IPV4EncapsulationPDU(self):
@@ -680,29 +673,52 @@ class Interfaces(dict):
 # Session layer
 #
 
+class Timer:
+
+    def __init__(self, event):
+        self.now   = tornado.ioloop.IOLoop.time()
+        self.wake  = None
+        self.event = event
+
+    def wake_after(self, delay):
+        when = self.now + delay
+        if self.wake is None or when < self.wake:
+            self.wake = when
+        return when
+
+    def expired(self, when):
+        return when <= self.now
+
+    @tornado.gen.coroutine
+    def wait(self):
+        try:
+            yield self.event.wait(timeout = self.wake)
+        except Tornado.gen.TimeoutError:
+            return False
+        else:
+            return True
+
+
 class Session:
 
-    # Unclear what (if anything) needs to be a coroutine here.
-
     def __init__(self, io, ifs, macaddr, ifname):
-        self.io = io
-        self.ifs = ifs
-        self.macaddr = macaddr
-        self.ifname  = ifname
-        self.is_open = False
+        self.io       = io
+        self.ifs      = ifs
+        self.macaddr  = macaddr
+        self.ifname   = ifname
+        self.is_open  = False
         self.dispatch = {}
-        self.rxq = {}
-        for k, v in PDU.pdu_type_map.items():
-            self.dispatch[k] = getattr(self, "handle_" + v.__name__)
-            if issubclass(v, (OpenPDU, EncapsulationPDU)):
-                self.rxq[k] = []
+        self.rxq      = {}
+        self.deferred = {}
+        self.dispatch = dict((k, getattr(self, "handle_" + v.__name__))
+                             for k, v in PDU.pdu_type_map.items())
 
     def close(self):
         if self.is_open:
             self.cleanup_rfc7752()
         self.is_open = False
-        for q in self.rxq.values():
-            del q[:]
+        self.rxq.clear()
+        self.deferred.clear()
 
     @property
     def is_open(self):
@@ -737,7 +753,7 @@ class Session:
         if not self.is_open:
             logger.info("Received keepalive but connection not open: %r", pdu)
             return
-        self.last_keepalive = time.time()
+        self.last_keepalive = tornado.ioloop.IOLoop.time()
 
     def handle_ACKPDU(self, pdu):
         if pdu.pdu_type not in self.rxq:
@@ -748,11 +764,12 @@ class Session:
             return
         logger.info("Received ACK %r for PDU %r", pdu, self.rxq[pdu.pdu_type])
         del self.rxq[pdu.pdu_type]
+        next_pdu = self.deferred.pop(pdu.pdu_type, None)
         if isinstance(pdu, OpenPDU):
-            assert not self.rxq[pdu.pdu_type]
+            assert next_pdu is None
             self.our_open_acked = True
-        else:
-            self.send_pdu(pdu.pdu_type)
+        elif next_pdu is not None:
+            self.send_pdu(next_pdu)
 
     def handle_encapsulation(self, pdu):
         if not self.is_open:
@@ -779,25 +796,30 @@ class Session:
         self.send_pdu(OpenPDU(local_id = self.local_id, remote_id = remote_id, attributes = attributes))
 
     def send_ack(self, pdu):
-        self.io.write(ACKPDU(acked_type = type(pdu)), self.macaddr)
+        self.send_pdu(ACKPDU(acked_type = type(pdu)))
 
-    # Approximately .25 baked.
+    def send_pdu(self, pdu):
+        if isinstance(pdu, EncapsulationPDU) and pdu.pdu_type in self.rxq:
+            self.deferred[pdu.pdu_type] = pdu
+            return
+        assert pdu.pdu_type not in self.rxq
+        if isinstance(pdu, (OpenPDU, EncapsulationPDU)):        
+            self.rxq[pdu.pdu_type] = pdu
+        self.io.write(pdu, self.macaddr)
+        if pdu.pdu_type in self.rxq:
+            #
+            # Set timers and counters here
+            # Then do Main.wake.set() to schedule retransmission
+            # This may need a bit more thought, still, again
+            # 
+            # Maybe OpenPDU and EncapsulationPDU should be subclasses of
+            # a new abstract ReliablePDU with extra methods to handle
+            # the timeout calculation, count, expoential backoff, ....
+            #
+            raise NotImplementedError
 
-    def send_pdu(self, pdu_or_type):
-        is_pdu = isinstance(pdu_or_type, PDU)
-        pdu_type = pdu_or_type.pdu_type if is_pdu else pdu_or_type
-        idle = not self.rxq[pdu_type]
-        if is_pdu:
-            self.rxq[pdu_type].append(pdu_or_type)
-            send_now = idle
-        else:
-            send_now = not idle
-        if send_now:
-            # Adjust retransmission timers, counters, ..., then
-            self.io.write(self.rxq[pdu_type], self.macaddr)
-
-    # Also need something to handle timeouts.  In Tornado that'd be
-    # something coming off the IOLoop.
+    def check_timeouts(self, timer):
+        raise NotImplementedError
 
 
 
@@ -807,26 +829,6 @@ class Session:
 
 # This is not even close to stable yet
 
-# Probably premature to assume that main() is just the receive loop.
-# More likely, main is a class and its .__init__() spawns several
-# loops: the receive loop, a HelloPDU sending loop, possibly a timeout
-# loop which runs over all sessions or something like that.  Or, since
-# we probably can't have a coroutine .__init__() method, perhaps a
-# better idiom would be to leave Main.__init__() undefined and instead
-# have a coroutine Main.main()
-
-# Need to do something (here or in a timer callback) to send
-# HELLO on every interface, or maybe all configured
-# interfaces, or intersection of configured and detected
-# interfaces, or ... but in any case we need to send some.
-#
-# Might want to do that in a separate pseudo-thread.
-#
-# Might want main() to just initialise shared data structures
-# and task pseudo-threads then wait them to exit.
-#
-# main() might want to be a class to simplify shared data.
-#
 # Need something here to gc dead sessions?
 
 default_config = '''\
@@ -857,13 +859,13 @@ class Main:
         if args.config is not None:
             cfg.read_file(args.config)
 
-        self.cfg = cfg["lsoe"]
         self.sessions = {}
-        self.ifs = Interfaces()
-        self.io  = EtherIO()
+        self.cfg  = cfg["lsoe"]
+        self.ifs  = Interfaces()
+        self.io   = EtherIO()
+        self.wake = tornado.locks.Event()
 
-        # Do something here to start the other coroutines
-
+        yield [self.receiver(), self.beacon(), self.timers(), self.interface_tracker()]
 
     @tornado.gen.coroutine
     def receiver(self):
@@ -875,13 +877,26 @@ class Main:
 
     @tornado.gen.coroutine
     def beacon(self):
-        # Beacon Hello PDUs
-        raise NotImplementedError
+        while True:
+            for i in self.ifs.values():
+                self.io.write(HelloPDU(my_macaddr = i.macaddr), LSOE_HELLO_MACADDR, i.name)
+            yield tornado.gen.sleep(self.cfg["hello_interval"])
 
     @tornado.gen.coroutine
     def timers(self):
-        # Handle timers, perhaps with an Event object and timeout
-        raise NotImplementedError
+        while True:
+            timer = Timer(self.wake)
+            for session in self.sessions.values():
+                session.check_timeouts(timer)
+            yield timer.wait()
+            self.wake.clear()
+
+    @tornado.gen.coroutine
+    def interface_tracker(self):
+        while True:
+            pdu = yield self.ifs.read_updates()
+            for session in self.sessions.values():
+                session.send_encap(pdu)
 
 
 if __name__ == "__main__":
