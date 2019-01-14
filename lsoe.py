@@ -234,7 +234,7 @@ class EtherIO:
     .close() methods, everything else is internal to the engine.
     """
 
-    class MACAddr:
+    class MACDB:
         def __init__(self, macaddr, ifname):
             self.macaddr = macaddr
             self.ifname = ifname
@@ -243,7 +243,7 @@ class EtherIO:
     def __init__(self, cfg):
         # Do we need to do anything with multicast setup?
         self.cfg = cfg
-        self.macaddrs = {}
+        self.macdb = {}
         self.dgrams = {}
         self.q = tornado.queues.Queue()
         self.s = socket.socket(socket.PF_PACKET, socket.SOCK_DGRAM, socket.htons(ETH_P_LSOE))
@@ -264,7 +264,7 @@ class EtherIO:
     # Convert PDU to bytes, breaks into datagrams, and sends them
     def write(self, pdu, macaddr, ifname = None):
         if ifname is None:
-            ifname = self.macaddrs[macaddr].ifname
+            ifname = self.macdb[macaddr].ifname
         for d in Datagram.split_message(bytes(pdu), macaddr, ifname):
             self.s.sendto(d.bytes, d.sa_ll)
 
@@ -282,12 +282,12 @@ class EtherIO:
         assert sa_ll.protocol == ETH_P_LSOE
         if sa_ll.pkttype == PACKET_OUTGOING:
             return
-        if sa_ll.macaddr not in self.macaddrs:
-            self.macaddrs[macaddr] = self.MACAddr(sa_ll.macaddr, sa_ll.ifname)
-        elif self.macaddrs[macaddr].ifname != sa_ll.ifname:
+        if sa_ll.macaddr not in self.macdb:
+            self.macdb[macaddr] = self.MACDB(sa_ll.macaddr, sa_ll.ifname)
+        elif self.macdb[macaddr].ifname != sa_ll.ifname:
             # Should yell about MAC address appearing on wrong interface here
             return
-        self.macaddrs[sa_ll.macaddr].timestamp = tornado.ioloop.IOLoop.time()
+        self.macdb[sa_ll.macaddr].timestamp = tornado.ioloop.IOLoop.time()
         d = Datagram.incoming(pkt, sa_ll)
         if not d.verify():
             return
@@ -319,9 +319,9 @@ class EtherIO:
             if not rq:
                 del self.dgrams[macaddr]
         threshold = now - self.cfg.getfloat("mac-address-cache-timeout")
-        for macaddr, m in self.macaddrs.items():
+        for macaddr, m in self.macdb.items():
             if m.timestamp < threshold:
-                del self.macaddrs[macaddr]
+                del self.macdb[macaddr]
 
 
 
@@ -445,6 +445,7 @@ def register_pdu(cls):
     assert cls.pdu_type is not None
     assert cls.pdu_type not in cls.pdu_type_map
     cls.pdu_type_map[cls.pdu_type] = cls
+    return cls
 
 class PDUParseError(Exception):
     "Error parsing LSOE PDU."
@@ -495,7 +496,7 @@ class HelloPDU(PDU):
         return self._b(self.h1.pack(self.my_macaddr))
 
     def __repr__(self):
-        return "<HelloPDU: {}>".format(":".join("{:02x}".format(b) for b in self.my_macaddr))
+        return "<HelloPDU: {}>".format(self.my_macaddr)
 
 @register_pdu
 class OpenPDU(PDU):
@@ -634,6 +635,9 @@ class MPLSIPv6EncapsulationPDU(EncapsulationPDU):
 # it has to initiate.  So I guess ._handle_event() has to push,
 # and Main/Session has to pull.
 
+# pyroute2 interface is all text representations of addresess, need to
+# convert to binary, just a question of where's the best place.
+
 class Interface:
 
     def __init__(self, index, name, macaddr, flags):
@@ -643,26 +647,24 @@ class Interface:
         self.flags   = flags
         self.ipaddrs = {}
         logger.debug("Interface %s [%s] macaddr %s flags %s",
-                     self.ifname, self.index,
-                     ":".join("{:02x}".format(b) for b in macaddr),
-                     self.flags)
+                     self.name, self.index, self.macaddr, self.flags)
 
     def add_ipaddr(self, family, ipaddr, prefixlen):
         if family not in self.ipaddrs:
             self.ipaddrs[family] = []
         self.ipaddrs[family].append((ipaddr, prefixlen))
         logger.debug("Interface %s [%s] add family %s %s/%s",
-                     self.ifname, self.index, family, ipaddr, prefixlen)
+                     self.name, self.index, family, ipaddr, prefixlen)
 
     def del_ipaddr(self, family, ipaddr, prefixlen):
         self.ipaddrs[family].remove((ipaddr, prefixlen))
         logger.debug("Interface %s [%s] del family %s %s/%s",
-                     self.ifname, self.index, family, ipaddr, prefixlen)
+                     self.name, self.index, family, ipaddr, prefixlen)
 
     def update_flags(self, flags):
         self.flags = flags
         logger.debug("Interface %s [%s] flags %s",
-                     self.ifname, self.index, flags)
+                     self.name, self.index, flags)
 
     @property
     def is_up(self):
@@ -948,34 +950,37 @@ class Session:
 
 class Main:
 
-    @tornado.gen.coroutine
-    def main(self):
-
+    def __init__(self):
         ap = argparse.ArgumentParser()
-        ap.add_argument("-c", "--config", help = "configuration file",
-                        type = argparse.FileType("r"), default = os.getenv("LSOE_CONFIG", None))
-        ap.add_argument("-d", "--debug", help = "bark more", action = "store_true")
+        ap.add_argument("-c", "--config",
+                        help = "configuration file",
+                        type = argparse.FileType("r"),
+                        default = os.getenv("LSOE_CONFIG", None))
+        ap.add_argument("-d", "--debug",
+                        help = "bark more",
+                        action = "store_true")
         args = ap.parse_args()
 
         cfg = configparser.ConfigParser()
         cfg.read_string(default_config)
         if args.config is not None:
             cfg.read_file(args.config)
+        self.cfg = cfg["lsoe"]
 
         logging.basicConfig(level = logging.DEBUG if args.debug else logging.INFO)
-
         logger.debug("Starting")
 
+    @tornado.gen.coroutine
+    def main(self):
         self.sessions = {}
-        self.cfg  = cfg["lsoe"]
         self.ifs  = Interfaces()
         self.io   = EtherIO(self.cfg)
         self.wake = tornado.locks.Event()
-
         yield [self.receiver(), self.beacon(), self.timers(), self.interface_tracker()]
 
     @tornado.gen.coroutine
     def receiver(self):
+        logger.debug("Starting receiver task")
         while True:
             msg, macaddr, ifname = yield self.io.read()
             if macaddr not in self.sessions:
@@ -984,15 +989,19 @@ class Main:
 
     @tornado.gen.coroutine
     def beacon(self):
+        logger.debug("Starting beacon task")
         while True:
+            logger.debug("Running beacon task")
             for i in self.ifs.values():
                 pdu = HelloPDU(my_macaddr = i.macaddr)
                 logger.debug("Multicasting %r to %s", pdu, i.name)
                 self.io.write(pdu, LSOE_HELLO_MACADDR, i.name)
+            logger.debug("Sleeping beacon task")
             yield tornado.gen.sleep(self.cfg.getfloat("hello-interval"))
 
     @tornado.gen.coroutine
     def timers(self):
+        logger.debug("Starting timers task")
         while True:
             timer = Timer(self.wake)
             for session in self.sessions.values():
@@ -1002,6 +1011,7 @@ class Main:
 
     @tornado.gen.coroutine
     def interface_tracker(self):
+        logger.debug("Starting interface_tracker task")
         while True:
             pdu = yield self.ifs.read_updates()
             for session in self.sessions.values():
