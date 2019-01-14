@@ -262,6 +262,10 @@ class EtherIO:
     def read(self):
         return self.q.get()
 
+    # Put a PDU back in the read queue, to simplify session restart
+    def unread(self, msg, macaddr, ifname):
+        self.q.put_nowait((bytes(msg), macaddr, ifname))
+
     # Convert PDU to bytes, breaks into datagrams, and sends them
     def write(self, pdu, macaddr, ifname = None):
         if ifname is None:
@@ -373,6 +377,14 @@ class IPEncapsulation(Encapsulation):
     def __bytes__(self):
         return self.h1.pack(self.flags, self.ipaddr, self.prefixlen)
 
+    def __repr__(self):
+        return "<{}: <{}{}> {} {}>".format(
+            self.__class__.__name__,
+            "P" if self.primary else "",
+            "L" if self.loopback else "",
+            socket.inet_ntop(socket.AF_INET if len(self.ipaddr) == 4 else socket.AF_INET6, self.ipaddr),
+            self.prefixlen)
+
 class MPLSIPEncapsulation(Encapsulation):
 
     # Pretend for now that we can treat an MPLS label as an opaque
@@ -399,6 +411,15 @@ class MPLSIPEncapsulation(Encapsulation):
         return self.h1.pack(self.flags, len(self.labels)) \
             + b"".join(self.h2.pack(label) for label in self.labels) \
             + self.h3.pack(self.ipaddr, self.prefixlen)
+
+    def __repr__(self):
+        return "<{}: <{}{}> {!r} {} {}>".format(
+            self.__class__.__name__,
+            "P" if self.primary else "",
+            "L" if self.loopback else "",
+            [label.hex() for label in self.labels],
+            socket.inet_ntop(socket.AF_INET if len(self.ipaddr) == 4 else socket.AF_INET6, self.ipaddr),
+            self.prefixlen)
 
 class IPv4Encapsulation(IPEncapsulation):
     h1 = struct.Struct("B4sB")
@@ -475,6 +496,9 @@ class HelloPDU(PDU):
     def __bytes__(self):
         return self._b(self.h1.pack(self.my_macaddr))
 
+    def __repr__(self):
+        return "<HelloPDU: {}>".format(":".join("{:02x}".format(b) for b in self.my_macaddr))
+
 @register_pdu
 class OpenPDU(PDU):
 
@@ -492,6 +516,10 @@ class OpenPDU(PDU):
 
     def __bytes__(self):
         return self._b(self.h1.pack(self.local_id, self.remote_id, self.attributes, 0))
+
+    def __repr__(self):
+        return "<OpenPDU: {} {} {} {}>".format(
+            self.nonce.hex(), self.local_id.hex(), self.remote_id.hex(), self.attributes.hex())
 
     @property
     def nonce(self):
@@ -518,6 +546,9 @@ class KeepAlivePDU(PDU):
     def __bytes__(self):
         return self._b(b"")
 
+    def __repr__(self):
+        return "<KeepAlivePDU>"
+
 @register_pdu
 class ACKPDU(PDU):
 
@@ -540,6 +571,9 @@ class ACKPDU(PDU):
         assert issubclass(self.acked_type, (OpenPDU, EncapsulationPDU))
         return self._b(self.h1.pack(self.acked_type.pdu_type))
 
+    def __repr__(self):
+        return "<ACKPDU: {}>".format(self.acked_type.__class__.__name__)
+
 class EncapsulationPDU(PDU):
 
     h1 = struct.Struct("H")
@@ -558,6 +592,9 @@ class EncapsulationPDU(PDU):
 
     def __bytes__(self):
         return self._b(self.h1.pack(len(self.encaps)) + b"".join(bytes(encap) for encap in self.encaps))
+
+    def __repr__(self):
+        return "<{}: {!r}>".format(self.__class__.__name__, self.encaps)
 
 @register_pdu
 class IPv4EncapsulationPDU(EncapsulationPDU):
@@ -740,12 +777,10 @@ class Timer:
 
 class Session:
 
-    def __init__(self, io, ifs, macaddr, ifname):
-        self.io       = io
-        self.ifs      = ifs
+    def __init__(self, main, macaddr, ifname):
+        self.main     = main
         self.macaddr  = macaddr
         self.ifname   = ifname
-        self.is_open  = False
         self.dispatch = {}
         self.rxq      = {}
         self.deferred = {}
@@ -768,7 +803,8 @@ class Session:
         assert not value
         self.our_open_acked = False
         self.peer_open_nonce = None
-        self.last_keepalive = None
+        self.saw_last_keepalive = None
+        self.send_next_keepalive = None
 
     def recv(self, msg):
         pdu = PDU.parse(msg)        
@@ -783,6 +819,12 @@ class Session:
             logger.info("Discarding duplicate OpenPDU: %r", pdu)
             return
         if self.peer_open_nonce is not None:
+            # If we change .close() to destroy the session and remove
+            # it from main.sessions[], we might want to salvage the
+            # PDU that triggered this first, to speed up the re-open:
+            #
+            #self.main.io.unread(pdu, self.macaddr, self.ifname)
+            #
             self.close()
         self.peer_open_nonce = pdu.nonce
         self.send_ack(pdu)
@@ -792,7 +834,7 @@ class Session:
         if not self.is_open:
             logger.info("Received keepalive but connection not open: %r", pdu)
             return
-        self.last_keepalive = tornado.ioloop.IOLoop.time()
+        self.saw_last_keepalive = tornado.ioloop.IOLoop.time()
 
     def handle_ACKPDU(self, pdu):
         if pdu.pdu_type not in self.rxq:
@@ -844,24 +886,33 @@ class Session:
         assert pdu.pdu_type not in self.rxq
         if isinstance(pdu, (OpenPDU, EncapsulationPDU)):        
             self.rxq[pdu.pdu_type] = pdu
-        self.io.write(pdu, self.macaddr)
+        self.main.io.write(pdu, self.macaddr)
         if pdu.pdu_type in self.rxq:
-            #
-            # Set timers and counters here
-            # Then do Main.wake.set() to schedule retransmission
-            # This may need a bit more thought, still, again
-            # 
-            # Maybe OpenPDU and EncapsulationPDU should be subclasses of
-            # a new abstract ReliablePDU with extra methods to handle
-            # the timeout calculation, count, expoential backoff, ....
-            #
-            raise NotImplementedError
+            pdu.rxmit_interval  = self.main.cfg.getfloat("retransmit-initial-interval")
+            pdu.rxmit_dropsleft = self.main.cfg.getint("retransmit-max-drop")
+            pdu.rxmit_timeout   = tornado.ioloop.IOLoop.time() + pdu.rxmit_interval
+            self.main.wake.set()
 
     def check_timeouts(self, timer):
-        raise NotImplementedError
+        for pdu in self.rxq.values():
+            if not timer.expired(pdu.rxmit_timeout):
+                timer.wake_after(pdu.rxmit_timeout)
+                continue
+            pdu.rxmit_dropsleft -= 1
+            if pdu.rxmit_dropsleft <= 0:
+                self.close()
+                return
+            if self.main.cfg.getboolean("retransmit-exponential-backoff"):
+                pdu.rxmit_interval *= 2
+            pdu.rxmit_timeout = timer.wake_after(pdu.rxmit_interval)
+            self.main.io.write(pdu, self.macaddr)
+        if self.is_open and (self.send_next_keepalive is None or timer.expired(self.send_next_keepalive)):
+            self.send_pdu(KeepAlivePDU())
+            self.send_next_keepalive = timer.wake_after(self.main.cfg.getfloat("keepalive-send-interval"))
 
     def report_rfc7752(self, pdu):
-        raise NotImplementedError
+        # No real RFC 7752 code yet, so just blat to log for now
+        logger.info("RFC-7752 data: %r", pdu)
 
 
 
@@ -889,7 +940,7 @@ class Main:
         self.sessions = {}
         self.cfg  = cfg["lsoe"]
         self.ifs  = Interfaces()
-        self.io   = EtherIO()
+        self.io   = EtherIO(self.cfg)
         self.wake = tornado.locks.Event()
 
         yield [self.receiver(), self.beacon(), self.timers(), self.interface_tracker()]
@@ -899,7 +950,7 @@ class Main:
         while True:
             msg, macaddr, ifname = yield self.io.read()
             if macaddr not in self.sessions:
-                self.sessions[macaddr] = Session(self.io, self.ifs, macaddr, ifname)
+                self.sessions[macaddr] = Session(self, macaddr, ifname)
             self.sessions[macaddr].recv(msg)
 
     @tornado.gen.coroutine
