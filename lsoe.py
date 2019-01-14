@@ -926,12 +926,15 @@ class Main:
         ap = argparse.ArgumentParser()
         ap.add_argument("-c", "--config", help = "configuration file",
                         type = argparse.FileType("r"), default = os.getenv("LSOE_CONFIG", None))
+        ap.add_argument("-d", "--debug", help = "bark more", action = "store_true")
         args = ap.parse_args()
 
         cfg = configparser.ConfigParser()
         cfg.read_string(default_config)
         if args.config is not None:
             cfg.read_file(args.config)
+
+        logging.basicConfig(level = logging.DEBUG if args.debug else logging.INFO)
 
         self.sessions = {}
         self.cfg  = cfg["lsoe"]
