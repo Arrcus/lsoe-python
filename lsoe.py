@@ -58,8 +58,7 @@ mac-address-cache-timeout = 300.0
 
 import os
 import sys
-import enum
-import time
+import copy
 import socket
 import struct
 import logging
@@ -276,6 +275,7 @@ class EtherIO:
     # Internal handler for READ events
     def _handle_read(self, events):
         pkt, sa_ll = s.recvfrom(ETH_DATA_LEN)
+        logger.debug("Received frame from %r", sa_ll)
         if len(pkt) < Datagram.h.size:
             return
         sa_ll = SockAddrLL(*sa_ll)
@@ -304,10 +304,12 @@ class EtherIO:
             if d.dgram_number != i or d.is_final != (d is rq[-1]):
                 return
         del self.dgrams[sa_ll.macaddr]
+        logger.debug("Queuing PDU for upper layer")
         self.q.put_nowait((b"".join(d.payload for d in rq), sa_ll.macaddr, sa_ll.ifname))
 
     # Internal handler to garbage collect incomplete messages and stale MAC addresses
     def _gc(self):
+        logger.debug("EtherIO GC")
         now = tornado.ioloop.IOLoop.time()
         threshold = now - self.cfg.getfloat("reassembly-timeout")
         for macaddr, rq in self.dgrams.items():
@@ -640,17 +642,27 @@ class Interface:
         self.macaddr = macaddr
         self.flags   = flags
         self.ipaddrs = {}
+        logger.debug("Interface %s [%s] macaddr %s flags %s",
+                     self.ifname, self.index,
+                     ":".join("{:02x}".format(b) for b in macaddr),
+                     self.flags)
 
     def add_ipaddr(self, family, ipaddr, prefixlen):
         if family not in self.ipaddrs:
             self.ipaddrs[family] = []
         self.ipaddrs[family].append((ipaddr, prefixlen))
+        logger.debug("Interface %s [%s] add family %s %s/%s",
+                     self.ifname, self.index, family, ipaddr, prefixlen)
 
     def del_ipaddr(self, family, ipaddr, prefixlen):
         self.ipaddrs[family].remove((ipaddr, prefixlen))
+        logger.debug("Interface %s [%s] del family %s %s/%s",
+                     self.ifname, self.index, family, ipaddr, prefixlen)
 
     def update_flags(self, flags):
         self.flags = flags
+        logger.debug("Interface %s [%s] flags %s",
+                     self.ifname, self.index, flags)
 
     @property
     def is_up(self):
@@ -660,6 +672,7 @@ class Interface:
 class Interfaces(dict):
     
     def __init__(self):
+        logger.debug("Initializing interfaces")
         self.q = tornado.queues.Queue()
         # Race condition: open event monitor socket before doing initial scans.
         self.ip = pyroute2.RawIPRoute()
@@ -681,6 +694,7 @@ class Interfaces(dict):
                     prefixlen = msg["prefixlen"])
         tornado.ioloop.IOLoop.current().add_handler(
             self.ip.fileno(), self._handle_event, tornado.ioloop.IOLoop.READ)
+        logger.debug("Done initializing interfaces")
 
     # Returns a Future, which returns an EncapsulationPDU
     def read_updates(self):
@@ -689,6 +703,7 @@ class Interfaces(dict):
     # Doc sketchy on RTM_DELLINK, may need to experiment
 
     def _handle_event(self, *ignored):
+        logger.debug("Interface updates")
         changed = set()
         for msg in ip.get():
             if msg["event"] == "RTM_NEWLINK" or msg["event"] == "RTM_DELLINK":
@@ -706,6 +721,7 @@ class Interfaces(dict):
             self.q.put_nowait(self._get_IPV4EncapsulationPDU())
         if changed & {True, socket.AF_INET6}:
             self.q.put_nowait(self._get_IPV6EncapsulationPDU())
+        logger.debug("Done interface updates")
 
     def get_encapsulations(self):
         return (self._get_IPV4EncapsulationPDU(),
@@ -773,6 +789,11 @@ class Timer:
 
 class Session:
 
+    def __repr__(self):
+        return "<Session {} {}>".format(
+            "+" if self.is_open else "",
+            ":".join("{:02x}".format(b) for b in self.macaddr))
+
     def __init__(self, main, macaddr, ifname):
         self.main     = main
         self.macaddr  = macaddr
@@ -782,8 +803,10 @@ class Session:
         self.deferred = {}
         self.dispatch = dict((k, getattr(self, "handle_" + v.__name__))
                              for k, v in PDU.pdu_type_map.items())
+        logger.debug("%r init", self)
 
     def close(self):
+        logger.debug("%r closing %r", self)
         if self.is_open:
             self.cleanup_rfc7752()
         self.is_open = False
@@ -804,6 +827,7 @@ class Session:
 
     def recv(self, msg):
         pdu = PDU.parse(msg)        
+        logger.debug("%r received PDU %r", self, pdu)
         self.dispatch[pdu.pdu_type](pdu)
 
     def handle_HelloPDU(self, pdu):
@@ -812,7 +836,7 @@ class Session:
     def handle_OpenPDU(self, pdu):
         assert pdu.nonce is not None
         if pdu.nonce == self.peer_open_nonce:
-            logger.info("Discarding duplicate OpenPDU: %r", pdu)
+            logger.info("%r discarding duplicate OpenPDU: %r", self, pdu)
             return
         if self.peer_open_nonce is not None:
             # If we change .close() to destroy the session and remove
@@ -828,18 +852,18 @@ class Session:
 
     def handle_KeepAlivePDU(self, pdu):
         if not self.is_open:
-            logger.info("Received keepalive but connection not open: %r", pdu)
+            logger.info("%r received keepalive but connection not open: %r", self, pdu)
             return
         self.saw_last_keepalive = tornado.ioloop.IOLoop.time()
 
     def handle_ACKPDU(self, pdu):
         if pdu.pdu_type not in self.rxq:
-            logger.info("Received ACK for unexpected PDU type: %r", pdu)
+            logger.info("%r received ACK for unexpected PDU type: %r", self, pdu)
             return
         if not self.rxq[pdu.pdu_type]:
-            logger.info("Received ACK with no relevant outgoing PDU: %r", pdu)
+            logger.info("%r received ACK with no relevant outgoing PDU: %r", self, pdu)
             return
-        logger.info("Received ACK %r for PDU %r", pdu, self.rxq[pdu.pdu_type])
+        logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.pdu_type])
         del self.rxq[pdu.pdu_type]
         next_pdu = self.deferred.pop(pdu.pdu_type, None)
         if isinstance(pdu, OpenPDU):
@@ -850,7 +874,7 @@ class Session:
 
     def handle_encapsulation(self, pdu):
         if not self.is_open:
-            logger.info("Received encapsulation but connection not open: %r", pdu)
+            logger.info("%r received encapsulation but connection not open: %r", self, pdu)
             return
         self.send_ACK(pdu)
         self.report_rfc7752(pdu)
@@ -877,9 +901,11 @@ class Session:
 
     def send_pdu(self, pdu):
         if isinstance(pdu, EncapsulationPDU) and pdu.pdu_type in self.rxq:
+            logger.debug("%r deferring PDU: %r", self, pdu)
             self.deferred[pdu.pdu_type] = pdu
             return
         assert pdu.pdu_type not in self.rxq
+        logger.debug("%r sending PDU: %r", self, pdu)
         if isinstance(pdu, (OpenPDU, EncapsulationPDU)):        
             self.rxq[pdu.pdu_type] = pdu
         self.main.io.write(pdu, self.macaddr)
@@ -890,6 +916,7 @@ class Session:
             self.main.wake.set()
 
     def check_timeouts(self, timer):
+        logger.debug("%r checking timers", self)
         for pdu in self.rxq.values():
             if not timer.expired(pdu.rxmit_timeout):
                 timer.wake_after(pdu.rxmit_timeout)
@@ -901,6 +928,7 @@ class Session:
             if self.main.cfg.getboolean("retransmit-exponential-backoff"):
                 pdu.rxmit_interval *= 2
             pdu.rxmit_timeout = timer.wake_after(pdu.rxmit_interval)
+            logger.debug("%r retransmitting %r", self, pdu)
             self.main.io.write(pdu, self.macaddr)
         if self.is_open and (self.send_next_keepalive is None or timer.expired(self.send_next_keepalive)):
             self.send_pdu(KeepAlivePDU())
@@ -936,6 +964,8 @@ class Main:
 
         logging.basicConfig(level = logging.DEBUG if args.debug else logging.INFO)
 
+        logger.debug("Starting")
+
         self.sessions = {}
         self.cfg  = cfg["lsoe"]
         self.ifs  = Interfaces()
@@ -956,7 +986,9 @@ class Main:
     def beacon(self):
         while True:
             for i in self.ifs.values():
-                self.io.write(HelloPDU(my_macaddr = i.macaddr), LSOE_HELLO_MACADDR, i.name)
+                pdu = HelloPDU(my_macaddr = i.macaddr)
+                logger.debug("Multicasting %r to %s", pdu, i.name)
+                self.io.write(pdu, LSOE_HELLO_MACADDR, i.name)
             yield tornado.gen.sleep(self.cfg.getfloat("hello-interval"))
 
     @tornado.gen.coroutine
@@ -973,8 +1005,8 @@ class Main:
         while True:
             pdu = yield self.ifs.read_updates()
             for session in self.sessions.values():
-                session.send_encap(pdu)
-
+                if session.is_open:
+                    session.send_pdu(copy.copy(pdu))
 
 if __name__ == "__main__":
     try:
