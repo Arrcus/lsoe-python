@@ -11,11 +11,7 @@ the final protocol.
 default_config = '''
 
 # Default configuration values, expressed in the same syntax
-# as the optional configuration file.  Supports ${foo} interpolation,
-# see documentation of configparser.ExtendedInterpolation class for details.
-#
-# Section name "[lsoe]" is mandatory.
-#
+# as the optional configuration file. Section name "[lsoe]" is mandatory.
 # All times expressed in seconds, so 0.1 is 100 milliseconds, etc.
 
 [lsoe]
@@ -253,9 +249,9 @@ class EtherIO:
         self.q = tornado.queues.Queue()
         self.s = socket.socket(socket.PF_PACKET, socket.SOCK_DGRAM, socket.htons(ETH_P_LSOE))
         self.ioloop = tornado.ioloop.IOLoop.current()
-        self.ioloop.add_handler(self.s, self._handle_read,  tornado.ioloop.READ)
-        #self.ioloop.add_handler(self.s, self._handle_error, tornado.ioloop.ERROR)
-        self.ioloop.PeriodicCallback(self._gc, self.cfg.getfloat("reassembly-timeout") * 500)
+        self.ioloop.add_handler(self.s, self._handle_read,  tornado.ioloop.IOLoop.READ)
+        #self.ioloop.add_handler(self.s, self._handle_error, tornado.ioloop.IOLoop.ERROR)
+        tornado.ioloop.PeriodicCallback(self._gc, self.cfg.getfloat("reassembly-timeout") * 500)
         # Might need one or more self.ioloop.spawn_callback() calls somewhere
 
     # Returns a Future, awaiting which returns a (bytes, macaddr, ifname) tuple
@@ -284,7 +280,7 @@ class EtherIO:
             return
         sa_ll = SockAddrLL(*sa_ll)
         assert sa_ll.protocol == ETH_P_LSOE
-        if sa_ll.pkttype = PACKET_OUTGOING:
+        if sa_ll.pkttype == PACKET_OUTGOING:
             return
         if sa_ll.macaddr not in self.macaddrs:
             self.macaddrs[macaddr] = self.MACAddr(sa_ll.macaddr, sa_ll.ifname)
@@ -917,7 +913,7 @@ class Session:
 
 
 #
-# Protocol engine
+# Main program
 #
 
 # Need something here to gc dead sessions?
@@ -932,7 +928,7 @@ class Main:
                         type = argparse.FileType("r"), default = os.getenv("LSOE_CONFIG", None))
         args = ap.parse_args()
 
-        cfg = configparser.ConfigParser(interpolation = configparser.ExtendedInterpolation)
+        cfg = configparser.ConfigParser()
         cfg.read_string(default_config)
         if args.config is not None:
             cfg.read_file(args.config)
@@ -980,6 +976,8 @@ class Main:
 if __name__ == "__main__":
     try:
         tornado.ioloop.IOLoop.current().run_sync(Main().main)
+    except SystemExit:
+        pass
     except:
         logger.exception("Unhandled exception")
         sys.exit(1)
