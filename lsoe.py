@@ -977,7 +977,7 @@ if __name__ == "__main__":
     try:
         tornado.ioloop.IOLoop.current().run_sync(Main().main)
     except SystemExit:
-        pass
+        raise
     except:
         logger.exception("Unhandled exception")
         sys.exit(1)
