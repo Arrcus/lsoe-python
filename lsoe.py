@@ -454,7 +454,7 @@ class MPLSIPEncapsulation(Encapsulation):
             self.__class__.__name__,
             "P" if self.primary else "",
             "L" if self.loopback else "",
-            [label.hex() for label in self.labels],
+            ["".join("{:02x}".format(l) for l in label) for label in self.labels],
             socket.inet_ntop(socket.AF_INET if len(self.ipaddr) == 4 else socket.AF_INET6, self.ipaddr),
             self.prefixlen)
 
@@ -558,7 +558,10 @@ class OpenPDU(PDU):
 
     def __repr__(self):
         return "<OpenPDU: {} {} {} {}>".format(
-            self.nonce.hex(), self.local_id.hex(), self.remote_id.hex(), self.attributes.hex())
+            "".join("{:02x}".format(b) for b in self.nonce),
+            ":".join("{:02x}".format(b) for b in self.local_id),
+            ":".join("{:02x}".format(b) for b in self.remote_id),
+            ",".join("{:02x}".format(b) for b in self.attributes))
 
     @property
     def nonce(self):
