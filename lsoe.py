@@ -944,20 +944,25 @@ class Session:
         self.handle_encapsulation(pdu)
 
     def send_open_maybe(self, remote_id = b"\x00" * 10, attributes = b""):
+        logger.debug("%s considering whether to send OpenPDU", self)
         if self.our_open_acked or self.rxq[OpenPDU.pdu_type]:
+            logger.debug("%r not sending OpenPDU: our_open_acked %s, self.rxq[OpenPDU] %r",
+                         self.our_open_acked, self.rxq[OpenPDU.pdu_type])
             return
-        self.send_pdu(OpenPDU(local_id = self.local_id, remote_id = remote_id, attributes = attributes))
+        pdu = OpenPDU(local_id = self.local_id, remote_id = remote_id, attributes = attributes)
+        logger.debug("%r sending %r", self, pdu)
+        self.send_pdu(pdu)
 
     def send_ack(self, pdu):
         self.send_pdu(ACKPDU(acked_type = type(pdu)))
 
     def send_pdu(self, pdu):
         if isinstance(pdu, EncapsulationPDU) and pdu.pdu_type in self.rxq:
-            logger.debug("%r deferring PDU: %r", self, pdu)
+            logger.debug("%r deferring %r", self, pdu)
             self.deferred[pdu.pdu_type] = pdu
             return
         assert pdu.pdu_type not in self.rxq
-        logger.debug("%r sending PDU: %r", self, pdu)
+        logger.debug("%r sending %r", self, pdu)
         if isinstance(pdu, (OpenPDU, EncapsulationPDU)):
             self.rxq[pdu.pdu_type] = pdu
         self.main.io.write(pdu, self.macaddr)
@@ -966,6 +971,7 @@ class Session:
             pdu.rxmit_dropsleft = self.main.cfg.getint("retransmit-max-drop")
             pdu.rxmit_timeout   = tornado.ioloop.IOLoop.current().time() + pdu.rxmit_interval
             self.main.wake.set()
+        logger.debug("%s done sending %r", self, pdu)
 
     def check_timeouts(self, timer):
         logger.debug("%r checking timers", self)
