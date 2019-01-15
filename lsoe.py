@@ -195,7 +195,7 @@ class Datagram:
             frag      = frag,
             length    = length,
             checksum  = checksum,
-            timestamp = tornado.ioloop.IOLoop.time())
+            timestamp = tornado.ioloop.IOLoop.current().time())
 
     def verify(self):
         return self.version == LSOE_VERSION and \
@@ -320,7 +320,7 @@ class EtherIO:
             logger.warn("MAC address %s moved from interface %s to interface %s",
                         macaddr, self.macdb[macaddr].ifname, sa_ll.ifname)
             return
-        self.macdb[macaddr].timestamp = tornado.ioloop.IOLoop.time()
+        self.macdb[macaddr].timestamp = self.ioloop.time()
         d = Datagram.incoming(pkt, sa_ll)
         if not d.verify():
             return
@@ -343,7 +343,7 @@ class EtherIO:
     # Garbage collect incomplete messages and stale MAC addresses
     def _gc(self):
         logger.debug("EtherIO GC")
-        now = tornado.ioloop.IOLoop.time()
+        now = self.ioloop.time()
         threshold = now - self.cfg.getfloat("reassembly-timeout")
         for macaddr, rq in self.dgrams.items():
             rq.sort(key = lambda d: d.timestamp)
@@ -807,7 +807,7 @@ class Interfaces(dict):
 class Timer:
 
     def __init__(self, event):
-        self.now   = tornado.ioloop.IOLoop.time()
+        self.now   = tornado.ioloop.IOLoop.current().time()
         self.wake  = None
         self.event = event
 
@@ -897,7 +897,7 @@ class Session:
         if not self.is_open:
             logger.info("%r received keepalive but connection not open: %r", self, pdu)
             return
-        self.saw_last_keepalive = tornado.ioloop.IOLoop.time()
+        self.saw_last_keepalive = tornado.ioloop.IOLoop.current().time()
 
     def handle_ACKPDU(self, pdu):
         if pdu.pdu_type not in self.rxq:
@@ -955,7 +955,7 @@ class Session:
         if pdu.pdu_type in self.rxq:
             pdu.rxmit_interval  = self.main.cfg.getfloat("retransmit-initial-interval")
             pdu.rxmit_dropsleft = self.main.cfg.getint("retransmit-max-drop")
-            pdu.rxmit_timeout   = tornado.ioloop.IOLoop.time() + pdu.rxmit_interval
+            pdu.rxmit_timeout   = tornado.ioloop.IOLoop.current().time() + pdu.rxmit_interval
             self.main.wake.set()
 
     def check_timeouts(self, timer):
