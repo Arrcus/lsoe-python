@@ -554,7 +554,7 @@ class OpenPDU(PDU):
                 raise PDUParserError
 
     def __bytes__(self):
-        return self._b(self.h1.pack(self.local_id, self.remote_id, self.attributes, 0))
+        return self._b(self.h1.pack(self.nonce, self.local_id, self.remote_id, self.attributes, 0))
 
     def __repr__(self):
         return "<OpenPDU: {} {} {} {}>".format(
