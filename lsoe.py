@@ -506,8 +506,10 @@ class PDU:
     def parse(cls, b):
         pdu_type, pdu_length = cls.h0.unpack_from(b, 0)
         if len(b) != pdu_length:
-            raise PDUParseError
-        self = cls.pdu_type_map[pdu_type](b)
+            raise PDUParseError("Unexpected PDU length: len(b) {}, pdu_length {}".format(len(b), pdu_length))
+        pdu_class = cls.pdu_type_map[pdu_type]
+        logger.debug("PDU class %s", pdu_class.__name__)
+        self = pdu_class(b)
         #self.pdu_bytes = b
         return self
 
@@ -582,7 +584,7 @@ class KeepAlivePDU(PDU):
     def __init__(self, b = None, **kwargs):
         assert not kwargs
         if b not in (None, b""):
-            raise PDUParseError
+            raise PDUParseError("KeepAlivePDU content payload must be empty")
 
     def __bytes__(self):
         return self._b(b"")
@@ -604,9 +606,9 @@ class ACKPDU(PDU):
             try:
                 self.acked_type = self.pdu_type_map[acked_type]
             except:
-                raise PDUParseError
+                raise PDUParseError("ACK of unknown PDU type {}".format(acked_type))
             if not issubclass(self.acked_type, (OpenPDU, EncapsulationPDU)):
-                raise PDUParseError
+                raise PDUParseError("ACK of un-ACKed PDU type {}".format(acked_type))
 
     def __bytes__(self):
         assert issubclass(self.acked_type, (OpenPDU, EncapsulationPDU))
@@ -879,10 +881,14 @@ class Session:
         self.send_next_keepalive = None
 
     def recv(self, msg):
-        logger.debug("%r parsing received PDU", self)
-        pdu = PDU.parse(msg)
-        logger.debug("%r received PDU %r", self, pdu)
-        self.dispatch[pdu.pdu_type](pdu)
+        try:
+            logger.debug("%r parsing received PDU", self)
+            pdu = PDU.parse(msg)
+        except PDUParseError as e:
+            logger.warn("%r couldn't parse PDU: %s", self, e)
+        else:
+            logger.debug("%r received PDU %r", self, pdu)
+            self.dispatch[pdu.pdu_type](pdu)
 
     def handle_HelloPDU(self, pdu):
         self.send_open_maybe()
