@@ -306,16 +306,16 @@ class EtherIO:
     def _handle_read(self, fd, events):
         assert fd == self.s
         pkt, sa_ll = self.s.recvfrom(ETH_DATA_LEN)
-        logger.debug("Received frame from %r", sa_ll)
+        sa_ll = SockAddrLL(*sa_ll)
+        assert sa_ll.protocol == ETH_P_LSOE
+        macaddr = MACAddress(sa_ll.macaddr)
+        logger.debug("Received frame from MAC address %s, interface %s", macaddr, sa_ll.ifname)
         if len(pkt) < Datagram.h.size:
             logger.debug("Frame length %s too short to contain transport header, dropping", len(pkt))
             return
-        sa_ll = SockAddrLL(*sa_ll)
-        assert sa_ll.protocol == ETH_P_LSOE
         if sa_ll.pkttype == PACKET_OUTGOING:
             logger.debug("Frame type flagged as our own output, dropping")
             return
-        macaddr = MACAddress(sa_ll.macaddr)
         if macaddr not in self.macdb:
             logger.debug("Frame from new MAC address %s", macaddr)
             self.macdb[macaddr] = self.MACDB(macaddr, sa_ll.ifname)
@@ -529,7 +529,8 @@ class HelloPDU(PDU):
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            self.my_macaddr, = self.h1.unpack_from(b, 0)
+            my_macaddr, = self.h1.unpack_from(b, 0)
+            self.my_macaddr = MACAddress(my_macaddr)
 
     def __bytes__(self):
         return self._b(self.h1.pack(self.my_macaddr))
