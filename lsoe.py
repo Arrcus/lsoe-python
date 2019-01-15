@@ -553,7 +553,7 @@ class OpenPDU(PDU):
             self.nonce, self.local_id, self.attributes, self.auth_length = self.h1.unpack_from(b, 0)
             if self.auth_length != 0:
                 # Implementation restriction until LSOE signature spec written
-                raise PDUParserError
+                raise PDUParseError("Received OpenPDU has non-zero auth_length {}".format(self.auth_length))
 
     def __bytes__(self):
         return self._b(self.h1.pack(self.nonce, self.local_id, self.attributes, 0))
