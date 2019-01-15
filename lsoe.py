@@ -740,7 +740,7 @@ class Interfaces(dict):
     def _handle_event(self, *ignored):
         logger.debug("Interface updates")
         changed = set()
-        for msg in ip.get():
+        for msg in self.ip.get():
             if msg["event"] == "RTM_NEWLINK" or msg["event"] == "RTM_DELLINK":
                 self[msg["index"]].update_flags(msg["flags"])
                 changed.add(True)
