@@ -1033,7 +1033,8 @@ class Main:
             cfg.read_file(args.config)
         self.cfg = cfg["lsoe"]
 
-        logging.basicConfig(level = logging.DEBUG if args.debug else logging.INFO)
+        logging.basicConfig(level  = logging.DEBUG if args.debug else logging.INFO,
+                            format = "%(asctime)s %(name)s[%(process)d] %(levelname)s %(message)s")
 
         self.configure_id()
 
