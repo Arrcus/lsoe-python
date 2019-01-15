@@ -912,7 +912,7 @@ class Session:
         if pdu.pdu_type not in self.rxq:
             logger.info("%r received ACK for unexpected PDU type: %r", self, pdu)
             return
-        if not self.rxq[pdu.pdu_type]:
+        if pdu.pdu_type not in self.rxq:
             logger.info("%r received ACK with no relevant outgoing PDU: %r", self, pdu)
             return
         logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.pdu_type])
@@ -945,9 +945,9 @@ class Session:
 
     def send_open_maybe(self, remote_id = b"\x00" * 10, attributes = b""):
         logger.debug("%s considering whether to send OpenPDU", self)
-        if self.our_open_acked or self.rxq[OpenPDU.pdu_type]:
+        if self.our_open_acked or OpenPDU.pdu_type in self.rxq:
             logger.debug("%r not sending OpenPDU: our_open_acked %s, self.rxq[OpenPDU] %r",
-                         self.our_open_acked, self.rxq[OpenPDU.pdu_type])
+                         self.our_open_acked, self.rxq.get(OpenPDU.pdu_type))
             return
         pdu = OpenPDU(local_id = self.local_id, remote_id = remote_id, attributes = attributes)
         logger.debug("%r sending %r", self, pdu)
@@ -1032,7 +1032,12 @@ class Main:
         self.ifs  = Interfaces()
         self.io   = EtherIO(self.cfg)
         self.wake = tornado.locks.Event()
-        yield [self.receiver(), self.beacon(), self.timers(), self.interface_tracker()]
+
+        wait_iterator = tornado.gen.WaitIterator(
+            self.receiver(), self.beacon(), self.timers(), self.interface_tracker())
+
+        while not wait_iterator.done():
+            yield wait_iterator.next()
 
     @tornado.gen.coroutine
     def receiver(self):
