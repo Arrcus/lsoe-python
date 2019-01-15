@@ -949,7 +949,7 @@ class Session:
             logger.debug("%r not sending OpenPDU: our_open_acked %s, self.rxq[OpenPDU] %r",
                          self.our_open_acked, self.rxq.get(OpenPDU.pdu_type))
             return
-        pdu = OpenPDU(local_id = self.local_id, remote_id = remote_id, attributes = attributes)
+        pdu = OpenPDU(local_id = self.main.local_id, remote_id = remote_id, attributes = attributes)
         logger.debug("%r sending %r", self, pdu)
         self.send_pdu(pdu)
 
@@ -1024,10 +1024,32 @@ class Main:
         self.cfg = cfg["lsoe"]
 
         logging.basicConfig(level = logging.DEBUG if args.debug else logging.INFO)
-        logger.debug("Starting")
+
+        self.configure_id()
+
+    def configure_id(self):
+        # Separate method because set of text formats we might have to
+        # parse is a bit open-ended.  For now we only support a hex
+        # string (with optional ":", "-", or whitespace separation
+        # between bytes).
+        #
+        # For convenience during initial testing we also support a
+        # default, which may go away, leaving this as mandatory
+        # configuration, thus requiring a config file.  Dunno yet.
+
+        try:
+            text = self.cfg["local-id"]
+
+        except configparser.NoOptionError:
+            import uuid
+            self.local_id = b"\x00" * (80 - 16) + uuid.UUID(open("/sys/class/dmi/id/product_uuid").read().strip()).bytes
+
+        else:
+            self.local_id = bytes.fromhex(text.replace("-", ":").replace(":", " "))
 
     @tornado.gen.coroutine
     def main(self):
+        logger.debug("Starting")
         self.sessions = {}
         self.ifs  = Interfaces()
         self.io   = EtherIO(self.cfg)
