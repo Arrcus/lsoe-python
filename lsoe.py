@@ -394,8 +394,8 @@ class Encapsulation:
 
 class IPEncapsulation(Encapsulation):
 
-    def __init__(self, b = None, offset = None):
-        self._kwset(b, offset)
+    def __init__(self, b = None, offset = None, **kwargs):
+        self._kwset(b, offset, kwargs)
         if b is not None:
             self.flags, self.ipaddr, self.prefixlen = self.h1.unpack_from(b, offset)
 
@@ -421,9 +421,9 @@ class MPLSIPEncapsulation(Encapsulation):
     h1 = struct.Struct("BB")
     h2 = struct.Struct("3s")
 
-    def __init__(self, b = None, offset = None):
+    def __init__(self, b = None, offset = None, **kwargs):
         self.labels = []
-        self._kwset(b, offset)
+        self._kwset(b, offset, kwargs)
         if b is not None:
             self.flags, label_count = self.h1.unpack_from(b, offset)
             offset += self.h1.size
