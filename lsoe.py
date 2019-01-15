@@ -949,7 +949,7 @@ class Session:
         logger.debug("%s considering whether to send OpenPDU", self)
         if self.our_open_acked or OpenPDU.pdu_type in self.rxq:
             logger.debug("%r not sending OpenPDU: our_open_acked %s, self.rxq[OpenPDU] %r",
-                         self.our_open_acked, self.rxq.get(OpenPDU.pdu_type))
+                         self, self.our_open_acked, self.rxq.get(OpenPDU.pdu_type))
             return
         pdu = OpenPDU(local_id = self.main.local_id, attributes = attributes)
         logger.debug("%r sending %r", self, pdu)
