@@ -63,6 +63,7 @@ import socket
 import struct
 import logging
 import argparse
+import textwrap
 import collections
 import configparser
 
@@ -1024,7 +1025,7 @@ class Main:
                         default = os.getenv("LSOE_CONFIG", None))
         ap.add_argument("-d", "--debug",
                         help = "bark more",
-                        action = "store_true")
+                        action = "count")
         args = ap.parse_args()
 
         cfg = configparser.ConfigParser()
@@ -1033,7 +1034,9 @@ class Main:
             cfg.read_file(args.config)
         self.cfg = cfg["lsoe"]
 
-        logging.basicConfig(level  = logging.DEBUG if args.debug else logging.INFO,
+        self.debug = args.debug
+
+        logging.basicConfig(level  = logging.DEBUG if self.debug else logging.INFO,
                             format = "%(asctime)s %(name)s[%(process)d] %(levelname)s %(message)s")
 
         self.configure_id()
@@ -1078,6 +1081,9 @@ class Main:
         while True:
             msg, macaddr, ifname = yield self.io.read()
             logger.debug("Received message from EtherIO layer, MAC address %s, interface %s", macaddr, ifname)
+            if self.debug > 1:
+                for i, line in enumerate(textwrap.wrap(" ".join("{:02x}".format(b) for b in msg))):
+                    logger.debug("[%3d] %s", i, line)
             if macaddr not in self.sessions:
                 logger.debug("Creating new session for MAC address %s, interface %s", macaddr, ifname)
                 self.sessions[macaddr] = Session(self, macaddr, ifname)
