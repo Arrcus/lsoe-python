@@ -847,6 +847,7 @@ class Session:
         self.main     = main
         self.macaddr  = macaddr
         self.ifname   = ifname
+        self.is_open  = False
         self.dispatch = {}
         self.rxq      = {}
         self.deferred = {}
