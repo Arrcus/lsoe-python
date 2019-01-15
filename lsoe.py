@@ -95,7 +95,7 @@ ETH_P_LSOE      = ETH_P_IEEE_EXP1
 # MAC address to which we should send LSOE Hello PDUs.
 # Some archived email discussing this, I think.
 
-LSOE_HELLO_MACADDR = b""        # Figure out real value...
+LSOE_HELLO_MACADDR = b"\xFF\xFF\xFF\xFF\xFF\xFF" # Figure out real value...
 
 # Linux PF_PACKET API constants from linux/if_packet.h.
 
