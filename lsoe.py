@@ -186,7 +186,7 @@ class Datagram:
     @classmethod
     def incoming(cls, b, sa_ll):
         version, frag, length, checksum = cls.h.unpack_from(b, 0)
-        if length > len(b):
+        if len(b) > length:
             b = b[:length]
         return cls(
             b         = b,
