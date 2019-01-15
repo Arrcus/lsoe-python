@@ -759,14 +759,14 @@ class Interfaces(dict):
             else:
                 logger.debug("pyroute2 WTF: %s event", msg["event"])
         if changed & {True, socket.AF_INET}:
-            self.q.put_nowait(self._get_IPV4EncapsulationPDU())
+            self.q.put_nowait(self._get_IPv4EncapsulationPDU())
         if changed & {True, socket.AF_INET6}:
-            self.q.put_nowait(self._get_IPV6EncapsulationPDU())
+            self.q.put_nowait(self._get_IPv6EncapsulationPDU())
         logger.debug("Done interface updates")
 
     def get_encapsulations(self):
-        return (self._get_IPV4EncapsulationPDU(),
-                self._get_IPV6EncapsulationPDU(),
+        return (self._get_IPv4EncapsulationPDU(),
+                self._get_IPv6EncapsulationPDU(),
                 self._get_MPLSIPv4EncapsulationPDU(),
                 self._get_MPLSIPv6EncapsulationPDU())
 
@@ -781,11 +781,11 @@ class Interfaces(dict):
                     ipaddr = addr, prefixlen = prefixlen))
         return pdu
 
-    def _get_IPV4EncapsulationPDU(self):
-        return self._get_IPEncapsulationPDU(socket.AF_INET,  IPV4EncapsulationPDU)
+    def _get_IPv4EncapsulationPDU(self):
+        return self._get_IPEncapsulationPDU(socket.AF_INET,  IPv4EncapsulationPDU)
 
-    def _get_IPV6EncapsulationPDU(self):
-        return self._get_IPEncapsulationPDU(socket.AF_INET6, IPV6EncapsulationPDU)
+    def _get_IPv6EncapsulationPDU(self):
+        return self._get_IPEncapsulationPDU(socket.AF_INET6, IPv6EncapsulationPDU)
 
     # Implementation restriction: we don't support MPLS yet, so only empty MPLS encapsulations
 
