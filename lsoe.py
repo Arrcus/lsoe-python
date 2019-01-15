@@ -543,24 +543,23 @@ class OpenPDU(PDU):
 
     pdu_type = 1
 
-    h1 = struct.Struct("4s10s10spH")
+    h1 = struct.Struct("4s10spH")
 
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            self.nonce, self.local_id, self.remote_id, self.attributes, self.auth_length = self.h1.unpack_from(b, 0)
+            self.nonce, self.local_id, self.attributes, self.auth_length = self.h1.unpack_from(b, 0)
             if self.auth_length != 0:
                 # Implementation restriction until LSOE signature spec written
                 raise PDUParserError
 
     def __bytes__(self):
-        return self._b(self.h1.pack(self.nonce, self.local_id, self.remote_id, self.attributes, 0))
+        return self._b(self.h1.pack(self.nonce, self.local_id, self.attributes, 0))
 
     def __repr__(self):
-        return "<OpenPDU: {} {} {} {}>".format(
+        return "<OpenPDU: {} {} {}>".format(
             "".join("{:02x}".format(b) for b in self.nonce),
             ":".join("{:02x}".format(b) for b in self.local_id),
-            ":".join("{:02x}".format(b) for b in self.remote_id),
             ",".join("{:02x}".format(b) for b in self.attributes))
 
     @property
@@ -903,7 +902,7 @@ class Session:
             self.close()
         self.peer_open_nonce = pdu.nonce
         self.send_ack(pdu)
-        self.send_open_maybe(remote_id = pdu.local_id)
+        self.send_open_maybe()
 
     def handle_KeepAlivePDU(self, pdu):
         if not self.is_open:
@@ -946,13 +945,13 @@ class Session:
     def handle_MPLSIPv6EncapsulationPDU(self, pdu):
         self.handle_encapsulation(pdu)
 
-    def send_open_maybe(self, remote_id = b"\x00" * 10, attributes = b""):
+    def send_open_maybe(self, attributes = b""):
         logger.debug("%s considering whether to send OpenPDU", self)
         if self.our_open_acked or OpenPDU.pdu_type in self.rxq:
             logger.debug("%r not sending OpenPDU: our_open_acked %s, self.rxq[OpenPDU] %r",
                          self.our_open_acked, self.rxq.get(OpenPDU.pdu_type))
             return
-        pdu = OpenPDU(local_id = self.main.local_id, remote_id = remote_id, attributes = attributes)
+        pdu = OpenPDU(local_id = self.main.local_id, attributes = attributes)
         logger.debug("%r sending %r", self, pdu)
         self.send_pdu(pdu)
 
