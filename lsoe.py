@@ -313,19 +313,21 @@ class EtherIO:
         assert sa_ll.protocol == ETH_P_LSOE
         if sa_ll.pkttype == PACKET_OUTGOING:
             return
-        if sa_ll.macaddr not in self.macdb:
-            self.macdb[macaddr] = self.MACDB(sa_ll.macaddr, sa_ll.ifname)
+        macaddr = MACAddress(sa_ll.macaddr)
+        if macaddr not in self.macdb:
+            self.macdb[macaddr] = self.MACDB(macaddr, sa_ll.ifname)
         elif self.macdb[macaddr].ifname != sa_ll.ifname:
-            # Should yell about MAC address appearing on wrong interface here
+            logger.warn("MAC address %s moved from interface %s to interface %s",
+                        macaddr, self.macdb[macaddr].ifname, sa_ll.ifname)
             return
-        self.macdb[sa_ll.macaddr].timestamp = tornado.ioloop.IOLoop.time()
+        self.macdb[macaddr].timestamp = tornado.ioloop.IOLoop.time()
         d = Datagram.incoming(pkt, sa_ll)
         if not d.verify():
             return
         try:
-            rq = self.dgrams[sa_ll.macaddr]
+            rq = self.dgrams[macaddr]
         except KeyError:
-            rq = self.dgrams[sa_ll.macaddr] = []
+            rq = self.dgrams[macaddr] = []
         rq.append(d)
         rq.sort(key = lambda d: (d.dgram_number, -d.timestamp))
         if not rq[-1].is_final:
@@ -334,11 +336,11 @@ class EtherIO:
         for i, d in enumerate(rq):
             if d.dgram_number != i or d.is_final != (d is rq[-1]):
                 return
-        del self.dgrams[sa_ll.macaddr]
+        del self.dgrams[macaddr]
         logger.debug("Queuing PDU for upper layer")
         self.q.put_nowait((b"".join(d.payload for d in rq), sa_ll.macaddr, sa_ll.ifname))
 
-    # Internal handler to garbage collect incomplete messages and stale MAC addresses
+    # Garbage collect incomplete messages and stale MAC addresses
     def _gc(self):
         logger.debug("EtherIO GC")
         now = tornado.ioloop.IOLoop.time()
