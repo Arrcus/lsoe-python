@@ -1051,8 +1051,8 @@ class Main:
             text = self.cfg["local-id"]
 
         except KeyError:
-            import uuid
-            self.local_id = b"\x00" * (80 - 16) + uuid.UUID(open("/sys/class/dmi/id/product_uuid").read().strip()).bytes
+            import hashlib
+            self.local_id = hashlib.md5(open("/sys/class/dmi/id/product_uuid").read().encode("ascii")).digest()[:10]
 
         else:
             self.local_id = bytes.fromhex(text.replace("-", ":").replace(":", " "))
