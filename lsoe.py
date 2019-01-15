@@ -615,7 +615,7 @@ class ACKPDU(PDU):
         return self._b(self.h1.pack(self.acked_type.pdu_type))
 
     def __repr__(self):
-        return "<ACKPDU: {}>".format(self.acked_type.__class__.__name__)
+        return "<ACKPDU: {} ({})>".format(self.acked_type.__class__.__name__, self.acked_type.pdu_type)
 
 class EncapsulationPDU(PDU):
 
@@ -962,7 +962,9 @@ class Session:
         self.send_pdu(pdu)
 
     def send_ack(self, pdu):
-        self.send_pdu(ACKPDU(acked_type = type(pdu)))
+        ack = ACKPDU(acked_type = type(pdu))
+        logger.debug("%r ACKing %r with %r", self, pdu, ack)
+        self.send_pdu(ack)
 
     def send_pdu(self, pdu):
         if isinstance(pdu, EncapsulationPDU) and pdu.pdu_type in self.rxq:
