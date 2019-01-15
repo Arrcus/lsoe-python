@@ -303,8 +303,9 @@ class EtherIO:
         self.ioloop.remove_handler(self.s)
 
     # Internal handler for READ events
-    def _handle_read(self, events):
-        pkt, sa_ll = s.recvfrom(ETH_DATA_LEN)
+    def _handle_read(self, fd, events):
+        assert fd == self.s
+        pkt, sa_ll = self.s.recvfrom(ETH_DATA_LEN)
         logger.debug("Received frame from %r", sa_ll)
         if len(pkt) < Datagram.h.size:
             return
