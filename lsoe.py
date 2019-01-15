@@ -317,7 +317,7 @@ class EtherIO:
             return
         macaddr = MACAddress(sa_ll.macaddr)
         if macaddr not in self.macdb:
-            loggder.debug("Frame from new MAC address %s", macaddr)
+            logger.debug("Frame from new MAC address %s", macaddr)
             self.macdb[macaddr] = self.MACDB(macaddr, sa_ll.ifname)
         elif self.macdb[macaddr].ifname != sa_ll.ifname:
             logger.warn("MAC address %s moved from interface %s to interface %s",
