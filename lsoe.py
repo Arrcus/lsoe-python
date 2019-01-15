@@ -344,7 +344,7 @@ class EtherIO:
                 return
         del self.dgrams[macaddr]
         logger.debug("Queuing PDU for upper layer")
-        self.q.put_nowait((b"".join(d.payload for d in rq), sa_ll.macaddr, sa_ll.ifname))
+        self.q.put_nowait((b"".join(d.payload for d in rq), macaddr, sa_ll.ifname))
 
     # Garbage collect incomplete messages and stale MAC addresses
     def _gc(self):
@@ -876,6 +876,7 @@ class Session:
         self.send_next_keepalive = None
 
     def recv(self, msg):
+        logger.debug("%r parsing received PDU", self)
         pdu = PDU.parse(msg)
         logger.debug("%r received PDU %r", self, pdu)
         self.dispatch[pdu.pdu_type](pdu)
@@ -1033,7 +1034,9 @@ class Main:
             msg, macaddr, ifname = yield self.io.read()
             logger.debug("Received message from EtherIO layer, MAC address %s, interface %s", macaddr, ifname)
             if macaddr not in self.sessions:
+                logger.debug("Creating new session for MAC address %s, interface %s", macaddr, ifname)
                 self.sessions[macaddr] = Session(self, macaddr, ifname)
+            logger.debug("Dispatching to session %r for MAC address %s, interface %s", self.sessions[macaddr], macaddr, ifname)
             self.sessions[macaddr].recv(msg)
 
     @tornado.gen.coroutine
