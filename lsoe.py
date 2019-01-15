@@ -131,7 +131,7 @@ class MACAddress(bytes):
 class IPAddress(bytes):
     def __new__(cls, thing):
         if isinstance(thing, str):
-            thing = socket.inet_pton(socket.AF_INET if ":" in thing else socket.AF_INET6, thing)
+            thing = socket.inet_pton(socket.AF_INET6 if ":" in thing else socket.AF_INET, thing)
         assert isinstance(thing, bytes) and len(thing) in (4, 16)
         return bytes.__new__(cls, thing)
 
@@ -226,7 +226,7 @@ class Datagram:
                            pkttype  = 0,
                            arptype  = 0)
         n = ETH_DATA_LEN - cls.h.size
-        chunks = [b[i : i + n] for i in xrange(0, len(b), n)]
+        chunks = [b[i : i + n] for i in range(0, len(b), n)]
         for i, chunk in enumerate(chunks):
             yield cls.outgoing(chunk, sa_ll, i, chunk is chunks[-1])
 
@@ -243,10 +243,10 @@ class Datagram:
         pkt = cls.h.pack(version, frag, length, 0) + b
         sum, result = [0, 0, 0, 0], 0
         for i, b in enumerate(pkt):
-            sum[i & 3] += self._sbox[b]
-        for i in xrange(4):
+            sum[i & 3] += cls._sbox[b]
+        for i in range(4):
             result = (result << 8) + sum[i]
-        for i in xrange(2):
+        for i in range(2):
             result = (result >> 32) + (result & 0xFFFFFFFF)
         return result
 
@@ -427,7 +427,7 @@ class MPLSIPEncapsulation(Encapsulation):
         if b is not None:
             self.flags, label_count = self.h1.unpack_from(b, offset)
             offset += self.h1.size
-            for i in xrange(label_count):
+            for i in range(label_count):
                 labels.append(self.h2.unpack_from(b, offset)[0])
                 offset += self.h2.size
             self.ipaddr, self.prefixlen = self.h3.unpack_from(b, offset)
@@ -594,7 +594,7 @@ class ACKPDU(PDU):
             except:
                 raise PDUParseError
             if not issubclass(self.acked_type, (OpenPDU, EncapsulationPDU)):
-                raise PDUParseError                
+                raise PDUParseError
 
     def __bytes__(self):
         assert issubclass(self.acked_type, (OpenPDU, EncapsulationPDU))
@@ -615,7 +615,7 @@ class EncapsulationPDU(PDU):
         if b is not None:
             count, = self.h1.unpack(b)
             offset = self.h1.size
-            for i in xrange(count):
+            for i in range(count):
                 encaps.append(self.encap_type(b, offset))
                 offset += len(encaps[-1])
 
@@ -698,11 +698,14 @@ class Interface:
 
     @property
     def is_up(self):
-        # Add other flags as needed, eg, IFF_LOWER_UP
         return self.flags & pyroute2.netlink.rtnl.ifinfmsg.IFF_UP != 0
 
+    @property
+    def is_loopback(self):
+        return self.flags & pyroute2.netlink.rtnl.ifinfmsg.IFF_LOOPBACK != 0
+
 class Interfaces(dict):
-    
+
     def __init__(self):
         logger.debug("Initializing interfaces")
         self.q = tornado.queues.Queue()
@@ -774,7 +777,7 @@ class Interfaces(dict):
                 # "primary" and "loopback" fields need work
                 pdu.encaps.append(cls.encap_type(
                     primary = False,
-                    loopback = iface.flags & IFF_LOOPBACK,
+                    loopback = iface.is_loopback,
                     ipaddr = addr, prefixlen = prefixlen))
         return pdu
 
@@ -863,7 +866,7 @@ class Session:
         self.send_next_keepalive = None
 
     def recv(self, msg):
-        pdu = PDU.parse(msg)        
+        pdu = PDU.parse(msg)
         logger.debug("%r received PDU %r", self, pdu)
         self.dispatch[pdu.pdu_type](pdu)
 
@@ -943,7 +946,7 @@ class Session:
             return
         assert pdu.pdu_type not in self.rxq
         logger.debug("%r sending PDU: %r", self, pdu)
-        if isinstance(pdu, (OpenPDU, EncapsulationPDU)):        
+        if isinstance(pdu, (OpenPDU, EncapsulationPDU)):
             self.rxq[pdu.pdu_type] = pdu
         self.main.io.write(pdu, self.macaddr)
         if pdu.pdu_type in self.rxq:
@@ -1028,8 +1031,11 @@ class Main:
         while True:
             logger.debug("Running beacon task")
             for iface in self.ifs.values():
-                if (iface.flags & IFF_LOOPBACK) != 0:
-                    logger.debug("Skipping Hello on loopback interface")
+                if iface.is_loopback:
+                    logger.debug("Skipping Hello on loopback interface %s", iface.name)
+                    continue
+                if not iface.is_up:
+                    logger.debug("Skipping Hello on down interface %s", iface.name)
                     continue
                 pdu = HelloPDU(my_macaddr = iface.macaddr)
                 logger.debug("Multicasting %r to %s", pdu, iface.name)
