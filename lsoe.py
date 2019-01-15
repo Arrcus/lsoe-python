@@ -1031,6 +1031,7 @@ class Main:
         logger.debug("Starting receiver task")
         while True:
             msg, macaddr, ifname = yield self.io.read()
+            logger.debug("Received message from EtherIO layer, MAC address %s, interface %s", macaddr, ifname)
             if macaddr not in self.sessions:
                 self.sessions[macaddr] = Session(self, macaddr, ifname)
             self.sessions[macaddr].recv(msg)
