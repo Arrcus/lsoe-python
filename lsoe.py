@@ -185,7 +185,7 @@ class Datagram:
 
     @classmethod
     def incoming(cls, b, sa_ll):
-        version, frag, length, checksum = cls.h.unpack(b)
+        version, frag, length, checksum = cls.h.unpack_from(b, 0)
         if length > len(b):
             b = b[:length]
         return cls(
@@ -498,7 +498,7 @@ class PDU:
 
     @classmethod
     def parse(cls, b):
-        pdu_type, pdu_length = cls.h0.unpack(b)
+        pdu_type, pdu_length = cls.h0.unpack_from(b, 0)
         if len(b) != pdu_length:
             raise PDUParseError
         self = cls.pdu_type_map[pdu_type](b)
@@ -523,7 +523,7 @@ class HelloPDU(PDU):
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            self.my_macaddr, = self.h1.unpack(b)
+            self.my_macaddr, = self.h1.unpack_from(b, 0)
 
     def __bytes__(self):
         return self._b(self.h1.pack(self.my_macaddr))
@@ -541,7 +541,7 @@ class OpenPDU(PDU):
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            self.nonce, self.local_id, self.remote_id, self.attributes, self.auth_length = self.h1.unpack(b)
+            self.nonce, self.local_id, self.remote_id, self.attributes, self.auth_length = self.h1.unpack_from(b, 0)
             if self.auth_length != 0:
                 # Implementation restriction until LSOE signature spec written
                 raise PDUParserError
@@ -591,7 +591,7 @@ class ACKPDU(PDU):
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            acked_type, = self.h1.unpack(b)
+            acked_type, = self.h1.unpack_from(b, 0)
             try:
                 self.acked_type = self.pdu_type_map[acked_type]
             except:
@@ -616,7 +616,7 @@ class EncapsulationPDU(PDU):
         self.encaps = []
         self._kwset(b, kwargs)
         if b is not None:
-            count, = self.h1.unpack(b)
+            count, = self.h1.unpack_from(b, 0)
             offset = self.h1.size
             for i in range(count):
                 encaps.append(self.encap_type(b, offset))
