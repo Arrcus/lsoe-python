@@ -1040,7 +1040,7 @@ class Main:
         try:
             text = self.cfg["local-id"]
 
-        except configparser.NoOptionError:
+        except KeyError:
             import uuid
             self.local_id = b"\x00" * (80 - 16) + uuid.UUID(open("/sys/class/dmi/id/product_uuid").read().strip()).bytes
 
