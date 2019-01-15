@@ -308,13 +308,16 @@ class EtherIO:
         pkt, sa_ll = self.s.recvfrom(ETH_DATA_LEN)
         logger.debug("Received frame from %r", sa_ll)
         if len(pkt) < Datagram.h.size:
+            logger.debug("Frame length %s too short to contain transport header, dropping", len(pkt))
             return
         sa_ll = SockAddrLL(*sa_ll)
         assert sa_ll.protocol == ETH_P_LSOE
         if sa_ll.pkttype == PACKET_OUTGOING:
+            logger.debug("Frame type flagged as our own output, dropping")
             return
         macaddr = MACAddress(sa_ll.macaddr)
         if macaddr not in self.macdb:
+            loggder.debug("Frame from new MAC address %s", macaddr)
             self.macdb[macaddr] = self.MACDB(macaddr, sa_ll.ifname)
         elif self.macdb[macaddr].ifname != sa_ll.ifname:
             logger.warn("MAC address %s moved from interface %s to interface %s",
@@ -323,6 +326,8 @@ class EtherIO:
         self.macdb[macaddr].timestamp = self.ioloop.time()
         d = Datagram.incoming(pkt, sa_ll)
         if not d.verify():
+            logger.debug("Frame failed verification, dropping: version %s length %s (%s) checksum %s",
+                         d.version, d.length, len(d.bytes), d.checksum)
             return
         try:
             rq = self.dgrams[macaddr]
@@ -335,6 +340,7 @@ class EtherIO:
         rq[:] = [d for i, d in enumerate(rq) if d.dgram_number >= i]
         for i, d in enumerate(rq):
             if d.dgram_number != i or d.is_final != (d is rq[-1]):
+                logger.debug("Reassembly failed, waiting for more frames")
                 return
         del self.dgrams[macaddr]
         logger.debug("Queuing PDU for upper layer")
