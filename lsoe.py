@@ -615,7 +615,7 @@ class ACKPDU(PDU):
         return self._b(self.h1.pack(self.acked_type.pdu_type))
 
     def __repr__(self):
-        return "<ACKPDU: {} ({})>".format(self.acked_type.__class__.__name__, self.acked_type.pdu_type)
+        return "<ACKPDU: {} ({})>".format(self.acked_type.__name__, self.acked_type.pdu_type)
 
 class EncapsulationPDU(PDU):
 
@@ -861,7 +861,7 @@ class Session:
         logger.debug("%r init", self)
 
     def close(self):
-        logger.debug("%r closing %r", self)
+        logger.debug("%r closing", self)
         if self.is_open:
             self.cleanup_rfc7752()
         self.is_open = False
