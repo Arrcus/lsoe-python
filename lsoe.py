@@ -115,6 +115,36 @@ logger = logging.getLogger(os.path.splitext(os.path.basename(sys.argv[0]))[0])
 
 
 #
+# Low-level data types
+#
+
+class MACAddress(bytes):
+    def __new__(cls, thing):
+        if isinstance(thing, str):
+            thing = bytes(int(i, 16) for i in thing.replace("-", ":").split(":"))
+        assert isinstance(thing, bytes) and len(thing) == 6
+        return bytes.__new__(cls, thing)
+
+    def __str__(self):
+        return ":".join("{:02x}".format(b) for b in self)
+
+class IPAddress(bytes):
+    def __new__(cls, thing):
+        if isinstance(thing, str):
+            thing = socket.inet_pton(socket.AF_INET if ":" in thing else socket.AF_INET6, thing)
+        assert isinstance(thing, bytes) and len(thing) in (4, 16)
+        return bytes.__new__(cls, thing)
+
+    def __str__(self):
+        return socket.inet_ntop(self.af, self)
+
+    @property
+    def af(self):
+        return socket.AF_INET if len(self) == 4 else socket.AF_INET6
+
+
+
+#
 # Transport layer
 #
 
@@ -687,13 +717,13 @@ class Interfaces(dict):
                     index   = msg["index"],
                     flags   = msg["flags"],
                     name    = msg.get_attr("IFLA_IFNAME"),
-                    macaddr = msg.get_attr("IFLA_ADDRESS"))
+                    macaddr = MACAddress(msg.get_attr("IFLA_ADDRESS")))
                 self[iface.index] = iface
             for msg in ipr.get_addr():
                 self[msg["index"]].add_ipaddr(
                     family = msg["family"],
-                    ipaddr = msg.get_attr("IFA_ADDRESS"),
-                    prefixlen = msg["prefixlen"])
+                    ipaddr = IPAddress(msg.get_attr("IFA_ADDRESS")),
+                    prefixlen = int(msg["prefixlen"]))
         tornado.ioloop.IOLoop.current().add_handler(
             self.ip.fileno(), self._handle_event, tornado.ioloop.IOLoop.READ)
         logger.debug("Done initializing interfaces")
@@ -712,10 +742,16 @@ class Interfaces(dict):
                 self[msg["index"]].update_flags(msg["flags"])
                 changed.add(True)
             elif msg["event"] == "RTM_NEWADDR":
-                self[msg["index"]].add_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"), prefixlen = msg["prefixlen"])
+                self[msg["index"]].add_ipaddr(
+                    family = msg["family"],
+                    ipaddr = IPAddress(msg.get_attr("IFA_ADDRESS")),
+                    prefixlen = int(msg["prefixlen"]))
                 changed.add(msg["family"])
             elif msg["event"] == "RTM_DELADDR":
-                self[msg["index"]].del_ipaddr(msg["family"], msg.get_attr("IFA_ADDRESS"), prefixlen = msg["prefixlen"])
+                self[msg["index"]].del_ipaddr(
+                    family = msg["family"],
+                    ipaddr = IPAddress(msg.get_attr("IFA_ADDRESS")),
+                    prefixlen = int(msg["prefixlen"]))
                 changed.add(msg["family"])
             else:
                 logger.debug("pyroute2 WTF: %s event", msg["event"])
@@ -733,14 +769,13 @@ class Interfaces(dict):
 
     def _get_IPEncapsulationPDU(self, af, cls):
         pdu = cls()
-        for i in self.values():
-            for a, p in i.ipaddrs[af]:
+        for iface in self.values():
+            for addr, prefixlen in iface.ipaddrs[af]:
                 # "primary" and "loopback" fields need work
                 pdu.encaps.append(cls.encap_type(
                     primary = False,
-                    loopback = i.flags & IFF_LOOPBACK,
-                    ipaddr = socket.inet_pton(af, a),
-                    prefixlen = int(p)))
+                    loopback = iface.flags & IFF_LOOPBACK,
+                    ipaddr = addr, prefixlen = prefixlen))
         return pdu
 
     def _get_IPV4EncapsulationPDU(self):
@@ -992,10 +1027,13 @@ class Main:
         logger.debug("Starting beacon task")
         while True:
             logger.debug("Running beacon task")
-            for i in self.ifs.values():
-                pdu = HelloPDU(my_macaddr = i.macaddr)
-                logger.debug("Multicasting %r to %s", pdu, i.name)
-                self.io.write(pdu, LSOE_HELLO_MACADDR, i.name)
+            for iface in self.ifs.values():
+                if (iface.flags & IFF_LOOPBACK) != 0:
+                    logger.debug("Skipping Hello on loopback interface")
+                    continue
+                pdu = HelloPDU(my_macaddr = iface.macaddr)
+                logger.debug("Multicasting %r to %s", pdu, iface.name)
+                self.io.write(pdu, LSOE_HELLO_MACADDR, iface.name)
             logger.debug("Sleeping beacon task")
             yield tornado.gen.sleep(self.cfg.getfloat("hello-interval"))
 
