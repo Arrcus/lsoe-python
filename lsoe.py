@@ -59,6 +59,7 @@ mac-address-cache-timeout = 300.0
 import os
 import sys
 import copy
+import time
 import socket
 import struct
 import logging
@@ -316,12 +317,9 @@ class EtherIO:
         sa_ll = SockAddrLL(*sa_ll)
         assert sa_ll.protocol == ETH_P_LSOE
         macaddr = MACAddress(sa_ll.macaddr)
-        logger.debug("Received frame from MAC address %s, interface %s", macaddr, sa_ll.ifname)
-        if len(pkt) < Datagram.h.size:
-            logger.debug("Frame length %s too short to contain transport header, dropping", len(pkt))
-            return
-        if sa_ll.pkttype == PACKET_OUTGOING:
-            logger.debug("Frame type flagged as our own output, dropping")
+        logger.debug("Received frame from MAC address %s, interface %s, length %d", macaddr, sa_ll.ifname, len(pkt))
+        if len(pkt) < Datagram.h.size or sa_ll.pkttype == PACKET_OUTGOING:
+            logger.debug("Frame too short or flagged as our own output, dropping")
             return
         if macaddr not in self.macdb:
             logger.debug("Frame from new MAC address %s", macaddr)
@@ -345,10 +343,9 @@ class EtherIO:
         rq[:] = [d for i, d in enumerate(rq) if d.dgram_number >= i]
         for i, d in enumerate(rq):
             if d.dgram_number != i or d.is_final != (d is rq[-1]):
-                logger.debug("Reassembly failed, waiting for more frames")
+                logger.debug("PDU reassembly failed, waiting for more frames")
                 return
         del self.dgrams[macaddr]
-        logger.debug("Queuing PDU for upper layer")
         self.q.put_nowait((b"".join(d.payload for d in rq), macaddr, sa_ll.ifname))
 
     # Garbage collect incomplete messages and stale MAC addresses
@@ -701,17 +698,17 @@ class Interface:
         logger.debug("Interface %s [%s] macaddr %s flags %s",
                      self.name, self.index, self.macaddr, self.flags)
 
-    def add_ipaddr(self, family, ipaddr, prefixlen):
-        if family not in self.ipaddrs:
-            self.ipaddrs[family] = []
-        self.ipaddrs[family].append((ipaddr, prefixlen))
-        logger.debug("Interface %s [%s] add family %s %s/%s",
-                     self.name, self.index, family, ipaddr, prefixlen)
+    def add_ipaddr(self, af, ipaddr, prefixlen):
+        if af not in self.ipaddrs:
+            self.ipaddrs[af] = []
+        self.ipaddrs[af].append((ipaddr, prefixlen))
+        logger.debug("Interface %s [%s] add af %s %s/%s",
+                     self.name, self.index, af, ipaddr, prefixlen)
 
-    def del_ipaddr(self, family, ipaddr, prefixlen):
-        self.ipaddrs[family].remove((ipaddr, prefixlen))
-        logger.debug("Interface %s [%s] del family %s %s/%s",
-                     self.name, self.index, family, ipaddr, prefixlen)
+    def del_ipaddr(self, af, ipaddr, prefixlen):
+        self.ipaddrs[af].remove((ipaddr, prefixlen))
+        logger.debug("Interface %s [%s] del af %s %s/%s",
+                     self.name, self.index, af, ipaddr, prefixlen)
 
     def update_flags(self, flags):
         self.flags = flags
@@ -746,8 +743,8 @@ class Interfaces(dict):
                 self[iface.index] = iface
             for msg in ipr.get_addr():
                 self[msg["index"]].add_ipaddr(
-                    family = msg["family"],
-                    ipaddr = IPAddress(msg.get_attr("IFA_ADDRESS")),
+                    af        = msg["family"],
+                    ipaddr    = IPAddress(msg.get_attr("IFA_ADDRESS")),
                     prefixlen = int(msg["prefixlen"]))
         tornado.ioloop.IOLoop.current().add_handler(
             self.ip.fileno(), self._handle_event, tornado.ioloop.IOLoop.READ)
@@ -768,18 +765,18 @@ class Interfaces(dict):
                 changed.add(True)
             elif msg["event"] == "RTM_NEWADDR":
                 self[msg["index"]].add_ipaddr(
-                    family = msg["family"],
-                    ipaddr = IPAddress(msg.get_attr("IFA_ADDRESS")),
+                    af        = msg["family"],
+                    ipaddr    = IPAddress(msg.get_attr("IFA_ADDRESS")),
                     prefixlen = int(msg["prefixlen"]))
                 changed.add(msg["family"])
             elif msg["event"] == "RTM_DELADDR":
                 self[msg["index"]].del_ipaddr(
-                    family = msg["family"],
-                    ipaddr = IPAddress(msg.get_attr("IFA_ADDRESS")),
+                    af        = msg["family"],
+                    ipaddr    = IPAddress(msg.get_attr("IFA_ADDRESS")),
                     prefixlen = int(msg["prefixlen"]))
                 changed.add(msg["family"])
             else:
-                logger.debug("pyroute2 WTF: %s event", msg["event"])
+                logger.debug("pyroute2 WTF: %r", msg)
         if changed & {True, socket.AF_INET}:
             self.q.put_nowait(self._get_IPv4EncapsulationPDU())
         if changed & {True, socket.AF_INET6}:
@@ -830,23 +827,37 @@ class Timer:
         self.now   = tornado.ioloop.IOLoop.current().time()
         self.wake  = None
         self.event = event
+        logger.debug("%r initialized", self)
+
+    def __repr__(self):
+        return "<Timer now {} ({}) wake {} ({})>".format(
+            self.now,
+            time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(self.now)),
+            self.wake,
+            time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(self.wake)) if self.wake else "")
 
     def wake_after(self, delay):
         when = self.now + delay
         if self.wake is None or when < self.wake:
             self.wake = when
+        logger.debug("%r wake_after(%s) %s", self, delay, when)
         return when
 
     def expired(self, when):
-        return when <= self.now
+        result = when <= self.now
+        logger.debug("%r expired(%s) %s", self, when, result)
+        return result
 
     @tornado.gen.coroutine
     def wait(self):
         try:
+            logger.debug("%r sleeping")
             yield self.event.wait(timeout = self.wake)
         except tornado.gen.TimeoutError:
+            logger.debug("%r timer wakeup")
             return False
         else:
+            logger.debug("%r event wakeup")
             return True
 
 
@@ -921,7 +932,6 @@ class Session:
     def handle_ACKPDU(self, pdu):
         if pdu.acked_type not in self.rxq:
             logger.info("%r received ACK with no relevant outgoing PDU: %r", self, pdu)
-            logger.debug("%r rxq %r", self, self.rxq)
             return
         logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.acked_type])
         del self.rxq[pdu.acked_type]
@@ -968,35 +978,37 @@ class Session:
             self.deferred[pdu.pdu_type] = pdu
             return
         assert pdu.pdu_type not in self.rxq
-        logger.debug("%r sending %r", self, pdu)
         if isinstance(pdu, (OpenPDU, EncapsulationPDU)):
             logger.debug("%r adding %r to rxq", self, pdu)
             self.rxq[pdu.pdu_type] = pdu
+        logger.debug("%r sending %r", self, pdu)
         self.main.io.write(pdu, self.macaddr)
         if pdu.pdu_type in self.rxq:
             pdu.rxmit_interval  = self.main.cfg.getfloat("retransmit-initial-interval")
             pdu.rxmit_dropsleft = self.main.cfg.getint("retransmit-max-drop")
             pdu.rxmit_timeout   = tornado.ioloop.IOLoop.current().time() + pdu.rxmit_interval
             self.main.wake.set()
-        logger.debug("%s done sending %r", self, pdu)
 
     def check_timeouts(self, timer):
         logger.debug("%r checking timers", self)
         for pdu in self.rxq.values():
             if not timer.expired(pdu.rxmit_timeout):
                 timer.wake_after(pdu.rxmit_timeout)
+                logger.debug("%r scheduled wakeup %r for unchanged PDU %r rxmit_timeout %s", self, timer, pdu, pdu.rxmit_timeout)
                 continue
             pdu.rxmit_dropsleft -= 1
             if pdu.rxmit_dropsleft <= 0:
+                logger.debug("%r too many drops for PDU %r, closing session", self, pdu)
                 return self.close()
             if self.main.cfg.getboolean("retransmit-exponential-backoff"):
                 pdu.rxmit_interval *= 2
             pdu.rxmit_timeout = timer.wake_after(pdu.rxmit_interval)
-            logger.debug("%r retransmitting %r", self, pdu)
+            logger.debug("%r retransmitting %r rxmit_timeout %s", self, pdu, pdu.rxmit_timeout)
             self.main.io.write(pdu, self.macaddr)
         if self.is_open and (self.send_next_keepalive is None or timer.expired(self.send_next_keepalive)):
-            self.send_pdu(KeepAlivePDU())
             self.send_next_keepalive = timer.wake_after(self.main.cfg.getfloat("keepalive-send-interval"))
+            logger.debug("%r sending keep-alive, next one scheduled for %s", self, self.send_next_keepalive)
+            self.send_pdu(KeepAlivePDU())
 
     def report_rfc7752(self, pdu):
         # No real RFC 7752 code yet, so just blat to log for now
@@ -1075,21 +1087,23 @@ class Main:
         while not wait_iterator.done():
             yield wait_iterator.next()
 
+    def log_raw_pdu(self, msg, macaddr, ifname):
+        logger.debug("Received PDU from EtherIO layer, MAC address %s, interface %s", macaddr, ifname)
+        for i, line in enumerate(textwrap.wrap(" ".join("{:02x}".format(b) for b in msg))):
+            logger.debug("[%3d] %s", i, line)
+
     @tornado.gen.coroutine
     def receiver(self):
         logger.debug("Starting receiver task")
         while True:
             msg, macaddr, ifname = yield self.io.read()
             if self.debug > 1:
-                logger.debug("Received message from EtherIO layer, MAC address %s, interface %s", macaddr, ifname)
-                for i, line in enumerate(textwrap.wrap(" ".join("{:02x}".format(b) for b in msg))):
-                    logger.debug("[%3d] %s", i, line)
+                self.log_raw_pdu(self, msg, macaddr, ifname)
             try:
                 session = self.sessions[macaddr]
             except KeyError:
                 session = self.sessions[macaddr] = Session(self, macaddr, ifname)
                 logger.debug("Created new session for MAC address %s, interface %s", macaddr, ifname)
-            logger.debug("Dispatching to session %r for MAC address %s, interface %s", session, macaddr, ifname)
             was_open = session.is_open
             self.sessions[macaddr].recv(msg)
             if session.is_open and not was_open:
