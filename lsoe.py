@@ -1074,7 +1074,8 @@ class Main:
                         default = os.getenv("LSOE_CONFIG", None))
         ap.add_argument("-d", "--debug",
                         help = "bark more",
-                        action = "count")
+                        action = "count",
+                        default = 0)
         args = ap.parse_args()
 
         cfg = configparser.ConfigParser()
