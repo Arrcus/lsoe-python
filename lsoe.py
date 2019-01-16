@@ -923,11 +923,9 @@ class Session:
         self.saw_last_keepalive = tornado.ioloop.IOLoop.current().time()
 
     def handle_ACKPDU(self, pdu):
-        if not isinstance(pdu, (OpenPDU, EncapsulationPDU)):
-            logger.info("%r received ACK for unexpected PDU type: %r", self, pdu)
-            return
         if pdu.pdu_type not in self.rxq:
             logger.info("%r received ACK with no relevant outgoing PDU: %r", self, pdu)
+            logger.debug("%r rxq %r", self, self.rxq)
             return
         logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.pdu_type])
         del self.rxq[pdu.pdu_type]
