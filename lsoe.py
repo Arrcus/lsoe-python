@@ -836,17 +836,29 @@ class Timer:
             self.wake,
             time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(self.wake)) if self.wake else "")
 
+    # The assertions in .wake_after() and .check_expired() are to
+    # catch accidental mis-use of one of these methods in place of the
+    # other.  They should be OK as long as Tornado's underlying time
+    # source is time.time(), but might break with time.monotonoic().
+    # So shake the bugs out of this code before trying that.
+
     def wake_after(self, delay):
+        # delay must be a relative time
+        assert delay >= 0 and delay < self.now
         when = self.now + delay
         if self.wake is None or when < self.wake:
             self.wake = when
         logger.debug("%r wake_after(%s) %s", self, delay, when)
         return when
 
-    def expired(self, when):
-        result = when <= self.now
-        logger.debug("%r expired(%s) %s", self, when, result)
-        return result
+    def check_expired(self, when):
+        # when must be an absolute time
+        assert when * 2 > self.now
+        expired = when <= self.now
+        if not expired and (self.wake is None or when < self.wake):
+            self.wake = when
+        logger.debug("%r expired(%s) %s", self, when, expired)
+        return expired
 
     @tornado.gen.coroutine
     def wait(self):
@@ -994,8 +1006,7 @@ class Session:
     def check_timeouts(self, timer):
         logger.debug("%r checking timers", self)
         for pdu in self.rxq.values():
-            if not timer.expired(pdu.rxmit_timeout):
-                timer.wake_after(pdu.rxmit_timeout)
+            if not timer.check_expired(pdu.rxmit_timeout):
                 logger.debug("%r scheduled wakeup %r for unchanged PDU %r rxmit_timeout %s", self, timer, pdu, pdu.rxmit_timeout)
                 continue
             pdu.rxmit_dropsleft -= 1
@@ -1007,7 +1018,7 @@ class Session:
             pdu.rxmit_timeout = timer.wake_after(pdu.rxmit_interval)
             logger.debug("%r retransmitting %r rxmit_timeout %s", self, pdu, pdu.rxmit_timeout)
             self.main.io.write(pdu, self.macaddr)
-        if self.is_open and (self.send_next_keepalive is None or timer.expired(self.send_next_keepalive)):
+        if self.is_open and (self.send_next_keepalive is None or timer.check_expired(self.send_next_keepalive)):
             self.send_next_keepalive = timer.wake_after(self.main.cfg.getfloat("keepalive-send-interval"))
             logger.debug("%r sending keep-alive, next one scheduled for %s", self, self.send_next_keepalive)
             self.send_pdu(KeepAlivePDU())
@@ -1109,7 +1120,7 @@ class Main:
             was_open = session.is_open
             self.sessions[macaddr].recv(msg)
             if session.is_open and not was_open:
-                logger.debug("Session %r just opened, stuffing initial encapsulations")
+                logger.debug("Session %r just opened, stuffing initial encapsulations", session)
                 for pdu in self.ifs.get_encapsulations():
                     session.send_pdu(pdu)
 
