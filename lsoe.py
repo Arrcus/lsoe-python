@@ -199,10 +199,16 @@ class Datagram:
             timestamp = tornado.ioloop.IOLoop.current().time())
 
     def verify(self):
-        return self.version == LSOE_VERSION and \
-            len(self.bytes) == self.length and \
-            self.checksum == self._sbox_checksum(
-                self.bytes[self.h.size:], self.frag, self.length)
+        if self.version != LSOE_VERSION:
+            logger.debug("Datagram verification failed: bad version: expected %s, got %s",  LSOE_VERSION, self.version)
+            return False
+        if len(self.bytes) != self.length:
+            logger.debug("Datagram verification failed: bad length: expected %s, got %s", len(self.bytes), self.length)
+            return False
+        if self.checksum != self._sbox_checksum(self.bytes[self.h.size:], self.frag, self.length):
+            logger.debug("Datagram verification failed: bad checksum")
+            return False
+        return True
 
     @classmethod
     def outgoing(cls, b, sa_ll, frag, last):
@@ -321,14 +327,12 @@ class EtherIO:
             logger.debug("Frame from new MAC address %s", macaddr)
             self.macdb[macaddr] = self.MACDB(macaddr, sa_ll.ifname)
         elif self.macdb[macaddr].ifname != sa_ll.ifname:
-            logger.warn("MAC address %s moved from interface %s to interface %s",
+            logger.warn("MAC address %s moved from interface %s to interface %s, dropping",
                         macaddr, self.macdb[macaddr].ifname, sa_ll.ifname)
             return
         self.macdb[macaddr].timestamp = self.ioloop.time()
         d = Datagram.incoming(pkt, sa_ll)
         if not d.verify():
-            logger.debug("Frame failed verification, dropping: version %s length %s (%s) checksum %s",
-                         d.version, d.length, len(d.bytes), d.checksum)
             return
         try:
             rq = self.dgrams[macaddr]
@@ -508,11 +512,7 @@ class PDU:
         pdu_type, pdu_length = cls.h0.unpack_from(b, 0)
         if len(b) != pdu_length:
             raise PDUParseError("Unexpected PDU length: len(b) {}, pdu_length {}".format(len(b), pdu_length))
-        pdu_class = cls.pdu_type_map[pdu_type]
-        logger.debug("PDU class %s", pdu_class.__name__)
-        self = pdu_class(b)
-        #self.pdu_bytes = b
-        return self
+        return cls.pdu_type_map[pdu_type](b)
 
     def _b(self, b):
         return self.h0.pack(self.pdu_type, self.h0.size + len(b)) + b
@@ -888,7 +888,6 @@ class Session:
 
     def recv(self, msg):
         try:
-            logger.debug("%r parsing received PDU", self)
             pdu = PDU.parse(msg)
         except PDUParseError as e:
             logger.warn("%r couldn't parse PDU: %s", self, e)
@@ -960,7 +959,6 @@ class Session:
         self.handle_encapsulation(pdu)
 
     def send_open_maybe(self, attributes = b""):
-        logger.debug("%s considering whether to send OpenPDU", self)
         if self.our_open_acked or OpenPDU.pdu_type in self.rxq:
             logger.debug("%r not sending OpenPDU: our_open_acked %s, self.rxq[OpenPDU] %r",
                          self, self.our_open_acked, self.rxq.get(OpenPDU.pdu_type))
@@ -1088,8 +1086,8 @@ class Main:
         logger.debug("Starting receiver task")
         while True:
             msg, macaddr, ifname = yield self.io.read()
-            logger.debug("Received message from EtherIO layer, MAC address %s, interface %s", macaddr, ifname)
             if self.debug > 1:
+                logger.debug("Received message from EtherIO layer, MAC address %s, interface %s", macaddr, ifname)
                 for i, line in enumerate(textwrap.wrap(" ".join("{:02x}".format(b) for b in msg))):
                     logger.debug("[%3d] %s", i, line)
             if macaddr not in self.sessions:
