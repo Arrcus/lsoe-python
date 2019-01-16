@@ -1098,7 +1098,7 @@ class Main:
         while True:
             msg, macaddr, ifname = yield self.io.read()
             if self.debug > 1:
-                self.log_raw_pdu(self, msg, macaddr, ifname)
+                self.log_raw_pdu(msg, macaddr, ifname)
             try:
                 session = self.sessions[macaddr]
             except KeyError:
