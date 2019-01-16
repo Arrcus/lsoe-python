@@ -923,13 +923,17 @@ class Session:
         self.saw_last_keepalive = tornado.ioloop.IOLoop.current().time()
 
     def handle_ACKPDU(self, pdu):
-        if pdu.pdu_type not in self.rxq:
+        #
+        # OK, maybe converting .acked_type back into a class wasn't
+        # such a great idea.  Clean up later if doing so looks cleaner.
+        #
+        if pdu.acked_type.pdu_type not in self.rxq:
             logger.info("%r received ACK with no relevant outgoing PDU: %r", self, pdu)
             logger.debug("%r rxq %r", self, self.rxq)
             return
-        logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.pdu_type])
-        del self.rxq[pdu.pdu_type]
-        next_pdu = self.deferred.pop(pdu.pdu_type, None)
+        logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.acked_type.pdu_type])
+        del self.rxq[pdu.acked_type.pdu_type]
+        next_pdu = self.deferred.pop(pdu.acked_type.pdu_type, None)
         if isinstance(pdu, OpenPDU):
             assert next_pdu is None
             self.our_open_acked = True
