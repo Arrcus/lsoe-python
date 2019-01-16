@@ -504,8 +504,12 @@ class PDU:
 
     h0 = struct.Struct("!BH")
 
-    def __cmp__(self, other):
-        return cmp(bytes(self), bytes(other))
+    def __eq__(self, other): return bytes(self) == bytes(other)
+    def __ne__(self, other): return bytes(self) != bytes(other)
+    def __lt__(self, other): return bytes(self) <  bytes(other)
+    def __gt__(self, other): return bytes(self) >  bytes(other)
+    def __le__(self, other): return bytes(self) <= bytes(other)
+    def __ge__(self, other): return bytes(self) >= bytes(other)
 
     @classmethod
     def parse(cls, b):
@@ -589,7 +593,7 @@ class KeepAlivePDU(PDU):
 
     def __init__(self, b = None, **kwargs):
         assert not kwargs
-        if b not in (None, b""):
+        if b is not None and len(b) != self.h0.size:
             raise PDUParseError("KeepAlivePDU content payload must be empty")
 
     def __bytes__(self):
