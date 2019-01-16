@@ -420,10 +420,10 @@ class IPEncapsulation(Encapsulation):
         return self.h1.pack(self.flags, self.ipaddr, self.prefixlen)
 
     def __repr__(self):
-        return "<{}: <{}{}> {} {}>".format(
+        return "<{}: {}{} {} {}>".format(
             self.__class__.__name__,
-            "P" if self.primary else "",
-            "L" if self.loopback else "",
+            "<P>" if self.primary else "",
+            "<L>" if self.loopback else "",
             socket.inet_ntop(socket.AF_INET if len(self.ipaddr) == 4 else socket.AF_INET6, self.ipaddr),
             self.prefixlen)
 
@@ -634,8 +634,8 @@ class EncapsulationPDU(PDU):
             count, = self.h1.unpack_from(b, self.h0.size)
             offset = self.h0.size + self.h1.size
             for i in range(count):
-                encaps.append(self.encap_type(b, offset))
-                offset += len(encaps[-1])
+                self.encaps.append(self.encap_type(b, offset))
+                offset += len(self.encaps[-1])
 
     def __bytes__(self):
         return self._b(self.h1.pack(len(self.encaps)) + b"".join(bytes(encap) for encap in self.encaps))
