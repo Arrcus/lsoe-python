@@ -554,7 +554,7 @@ class OpenPDU(PDU):
         if b is not None:
             self.nonce, self.local_id, attribute_length = self.h1.unpack_from(b, 0)
             self.attributes = b[self.h1.size : self.h1.size + attribute_length]
-            self.auth_length, = self.h2.unpack_from(self.h1.size + attribute_length)
+            self.auth_length, = self.h2.unpack_from(b, self.h1.size + attribute_length)
             if self.auth_length != 0:
                 # Implementation restriction until LSOE signature spec written
                 raise PDUParseError("Received OpenPDU has non-zero auth_length {}".format(self.auth_length))
