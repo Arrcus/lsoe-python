@@ -987,6 +987,8 @@ class Session:
             pdu.rxmit_interval  = self.main.cfg.getfloat("retransmit-initial-interval")
             pdu.rxmit_dropsleft = self.main.cfg.getint("retransmit-max-drop")
             pdu.rxmit_timeout   = tornado.ioloop.IOLoop.current().time() + pdu.rxmit_interval
+            logger.debug("%r setting initial rxmit_timeout %s rxmit_interval %s rxmit_dropsleft %s for %r",
+                         self, pdu.rxmit_timeout, pdu.rxmit_interval, pdu.rxmit_dropsleft, pdu)
             self.main.wake.set()
 
     def check_timeouts(self, timer):
@@ -1153,6 +1155,8 @@ if __name__ == "__main__":
         tornado.ioloop.IOLoop.current().run_sync(Main().main)
     except SystemExit:
         raise
+    except KeyboardInterrupt:
+        sys.exit(0)
     except:
         logger.exception("Unhandled exception")
         sys.exit(1)
