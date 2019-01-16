@@ -791,12 +791,13 @@ class Interfaces(dict):
     def _get_IPEncapsulationPDU(self, af, cls):
         pdu = cls()
         for iface in self.values():
-            for addr, prefixlen in iface.ipaddrs[af]:
-                # "primary" and "loopback" fields need work
-                pdu.encaps.append(cls.encap_type(
-                    primary = False,
-                    loopback = iface.is_loopback,
-                    ipaddr = addr, prefixlen = prefixlen))
+            if af in iface.ipaddrs:
+                for addr, prefixlen in iface.ipaddrs[af]:
+                    # "primary" and "loopback" fields need work
+                    pdu.encaps.append(cls.encap_type(
+                        primary = False,
+                        loopback = iface.is_loopback,
+                        ipaddr = addr, prefixlen = prefixlen))
         return pdu
 
     def _get_IPv4EncapsulationPDU(self):
@@ -839,7 +840,7 @@ class Timer:
     def wait(self):
         try:
             yield self.event.wait(timeout = self.wake)
-        except Tornado.gen.TimeoutError:
+        except tornado.gen.TimeoutError:
             return False
         else:
             return True
@@ -997,6 +998,11 @@ class Session:
         # No real RFC 7752 code yet, so just blat to log for now
         logger.info("RFC-7752 data: %r", pdu)
 
+    def cleanup_rfc7752(self):
+        for cls in PDU.pdu_type_map.values():
+            if issubclass(cls, EncapsulationPDU):
+                self.report_rfc7752(cls())
+
 
 
 #
@@ -1110,7 +1116,7 @@ class Main:
         logger.debug("Starting timers task")
         while True:
             timer = Timer(self.wake)
-            for session in self.sessions.values():
+            for session in tuple(self.sessions.values()):
                 session.check_timeouts(timer)
             yield timer.wait()
             self.wake.clear()
