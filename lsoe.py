@@ -417,7 +417,7 @@ class IPEncapsulation(Encapsulation):
         return self.h1.pack(self.flags, self.ipaddr, self.prefixlen)
 
     def __repr__(self):
-        return "<{}: {}{} {} {}>".format(
+        return "<{}: {}{} {}/{}>".format(
             self.__class__.__name__,
             "<P>" if self.primary else "",
             "<L>" if self.loopback else "",
