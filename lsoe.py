@@ -857,7 +857,7 @@ class Timer:
         expired = when <= self.now
         if not expired and (self.wake is None or when < self.wake):
             self.wake = when
-        logger.debug("%r expired(%s) %s", self, when, expired)
+        logger.debug("%r check_expired(%s) %s", self, when, expired)
         return expired
 
     @tornado.gen.coroutine
@@ -934,12 +934,12 @@ class Session:
         self.peer_open_nonce = pdu.nonce
         self.send_ack(pdu)
         self.send_open_maybe()
+        self.saw_keepalive()
 
     def handle_KeepAlivePDU(self, pdu):
         if not self.is_open:
             logger.info("%r received keepalive but connection not open: %r", self, pdu)
-            return
-        self.saw_last_keepalive = tornado.ioloop.IOLoop.current().time()
+        self.saw_keepalive()
 
     def handle_ACKPDU(self, pdu):
         if pdu.acked_type not in self.rxq:
@@ -951,6 +951,7 @@ class Session:
         if pdu.acked_type == OpenPDU.pdu_type:
             assert next_pdu is None
             self.our_open_acked = True
+            self.saw_keepalive()
         elif next_pdu is not None:
             self.send_pdu(next_pdu)
 
@@ -972,6 +973,10 @@ class Session:
 
     def handle_MPLSIPv6EncapsulationPDU(self, pdu):
         self.handle_encapsulation(pdu)
+
+    def saw_keepalive(self):
+        if self.is_open:
+            self.saw_last_keepalive = tornado.ioloop.IOLoop.current().time()
 
     def send_open_maybe(self, attributes = b""):
         if self.our_open_acked:
@@ -1006,6 +1011,10 @@ class Session:
     def check_timeouts(self, timer):
         logger.debug("%r checking timers", self)
 
+        if self.is_open and timer.now > self.saw_last_keepalive + self.main.cfg.getfloat("keepalive-receive-timeout"):
+            logger.info("%r too long since last KeepAlive, closing session", self)
+            return self.close()
+
         for pdu in self.rxq.values():
             if not timer.check_expired(pdu.rxmit_timeout):
                 logger.debug("%r scheduled wakeup %r for unchanged PDU %r rxmit_timeout %s (%s)",
@@ -1015,14 +1024,17 @@ class Session:
 
             pdu.rxmit_dropsleft -= 1
             if pdu.rxmit_dropsleft <= 0:
-                logger.debug("%r too many drops for PDU %r, closing session", self, pdu)
+                logger.info("%r too many drops for PDU %r, closing session", self, pdu)
                 return self.close()
+
             if self.main.cfg.getboolean("retransmit-exponential-backoff"):
                 pdu.rxmit_interval *= 2
+
             pdu.rxmit_timeout = timer.wake_after(pdu.rxmit_interval)
             logger.debug("%r retransmitting %r rxmit_timeout %s (%s)",
                          self, pdu, pdu.rxmit_timeout,
                          time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(pdu.rxmit_timeout)))
+
             self.main.io.write(pdu, self.macaddr)
 
         if self.is_open and (self.send_next_keepalive is None or timer.check_expired(self.send_next_keepalive)):
