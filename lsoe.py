@@ -853,13 +853,16 @@ class Session:
             ":".join("{:02x}".format(b) for b in self.macaddr))
 
     def __init__(self, main, macaddr, ifname):
-        self.main     = main
-        self.macaddr  = macaddr
-        self.ifname   = ifname
-        self.is_open  = False
-        self.dispatch = {}
-        self.rxq      = {}
-        self.deferred = {}
+        self.main                = main
+        self.macaddr             = macaddr
+        self.ifname              = ifname
+        self.dispatch            = {}
+        self.rxq                 = {}
+        self.deferred            = {}
+        self.our_open_acked      = False
+        self.peer_open_nonce     = None
+        self.saw_last_keepalive  = None
+        self.send_next_keepalive = None
         self.dispatch = dict((k, getattr(self, "handle_" + v.__name__))
                              for k, v in PDU.pdu_type_map.items())
         logger.debug("%r init", self)
@@ -868,9 +871,7 @@ class Session:
         logger.debug("%r closing", self)
         if self.is_open:
             self.cleanup_rfc7752()
-        self.is_open = False
-        self.rxq.clear()
-        self.deferred.clear()
+        del self.main.sessions[self.macaddr]
 
     @property
     def is_open(self):
@@ -879,10 +880,6 @@ class Session:
     @is_open.setter
     def is_open(self, value):
         assert not value
-        self.our_open_acked = False
-        self.peer_open_nonce = None
-        self.saw_last_keepalive = None
-        self.send_next_keepalive = None
 
     def recv(self, msg):
         try:
@@ -902,13 +899,8 @@ class Session:
             logger.info("%r discarding duplicate OpenPDU: %r", self, pdu)
             return
         if self.peer_open_nonce is not None:
-            # If we change .close() to destroy the session and remove
-            # it from main.sessions[], we might want to salvage the
-            # PDU that triggered this first, to speed up the re-open:
-            #
-            #self.main.io.unread(pdu, self.macaddr, self.ifname)
-            #
-            self.close()
+            self.main.io.unread(pdu, self.macaddr, self.ifname)
+            return self.close()
         self.peer_open_nonce = pdu.nonce
         self.send_ack(pdu)
         self.send_open_maybe()
@@ -953,13 +945,12 @@ class Session:
         self.handle_encapsulation(pdu)
 
     def send_open_maybe(self, attributes = b""):
-        if self.our_open_acked or OpenPDU.pdu_type in self.rxq:
-            logger.debug("%r not sending OpenPDU: our_open_acked %s, self.rxq[OpenPDU] %r",
-                         self, self.our_open_acked, self.rxq.get(OpenPDU.pdu_type))
-            return
-        pdu = OpenPDU(local_id = self.main.local_id, attributes = attributes)
-        logger.debug("%r sending %r", self, pdu)
-        self.send_pdu(pdu)
+        if self.our_open_acked:
+            logger.debug("%r not sending OpenPDU because our Open has already been ACKed", self)
+        elif OpenPDU.pdu_type in self.rxq:
+            logger.debug("%r not sending OpenPDU because we're already sending %r", self, self.rxq[OpenPDU.pdu_type])
+        else:
+            self.send_pdu(OpenPDU(local_id = self.main.local_id, attributes = attributes))
 
     def send_ack(self, pdu):
         self.send_pdu(ACKPDU(acked_type = pdu.pdu_type))
@@ -990,8 +981,7 @@ class Session:
                 continue
             pdu.rxmit_dropsleft -= 1
             if pdu.rxmit_dropsleft <= 0:
-                self.close()
-                return
+                return self.close()
             if self.main.cfg.getboolean("retransmit-exponential-backoff"):
                 pdu.rxmit_interval *= 2
             pdu.rxmit_timeout = timer.wake_after(pdu.rxmit_interval)
