@@ -428,8 +428,8 @@ class MPLSIPEncapsulation(Encapsulation):
     # Pretend for now that we can treat an MPLS label as an opaque
     # three-octet string rather than needing get/set properties.
 
-    h1 = struct.Struct("BB")
-    h2 = struct.Struct("3s")
+    h1 = struct.Struct("!BB")
+    h2 = struct.Struct("!3s")
 
     def __init__(self, b = None, offset = None, **kwargs):
         self.labels = []
@@ -460,16 +460,16 @@ class MPLSIPEncapsulation(Encapsulation):
             self.prefixlen)
 
 class IPv4Encapsulation(IPEncapsulation):
-    h1 = struct.Struct("B4sB")
+    h1 = struct.Struct("!B4sB")
 
 class IPv6Encapsulation(IPEncapsulation):
-    h1 = struct.Struct("B16sB")
+    h1 = struct.Struct("!B16sB")
 
 class MPLSIPv4Encapsulation(MPLSIPEncapsulation):
-    h3 = struct.Struct("4sB")
+    h3 = struct.Struct("!4sB")
 
 class MPLSIPv6Encapsulation(MPLSIPEncapsulation):
-    h3 = struct.Struct("16sB")
+    h3 = struct.Struct("!16sB")
 
 
 
@@ -527,12 +527,12 @@ class HelloPDU(PDU):
 
     pdu_type = 0
 
-    h1 = struct.Struct("6s")
+    h1 = struct.Struct("!6s")
 
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            my_macaddr, = self.h1.unpack_from(b, 0)
+            my_macaddr, = self.h1.unpack_from(b, self.h0.size)
             self.my_macaddr = MACAddress(my_macaddr)
 
     def __bytes__(self):
@@ -546,15 +546,15 @@ class OpenPDU(PDU):
 
     pdu_type = 1
 
-    h1 = struct.Struct("4s10sB")
-    h2 = struct.Struct("H")
+    h1 = struct.Struct("!4s10sB")
+    h2 = struct.Struct("!H")
 
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            self.nonce, self.local_id, attribute_length = self.h1.unpack_from(b, 0)
+            self.nonce, self.local_id, attribute_length = self.h1.unpack_from(b, self.h0.size)
             self.attributes = b[self.h1.size : self.h1.size + attribute_length]
-            self.auth_length, = self.h2.unpack_from(b, self.h1.size + attribute_length)
+            self.auth_length, = self.h2.unpack_from(b, self.h0.size + self.h1.size + attribute_length)
             if self.auth_length != 0:
                 # Implementation restriction until LSOE signature spec written
                 raise PDUParseError("Received OpenPDU has non-zero auth_length {}".format(self.auth_length))
@@ -603,12 +603,12 @@ class ACKPDU(PDU):
 
     pdu_type = 3
 
-    h1 = struct.Struct("B")
+    h1 = struct.Struct("!B")
 
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            acked_type, = self.h1.unpack_from(b, 0)
+            acked_type, = self.h1.unpack_from(b, self.h0.size)
             try:
                 self.acked_type = self.pdu_type_map[acked_type]
             except:
@@ -625,7 +625,7 @@ class ACKPDU(PDU):
 
 class EncapsulationPDU(PDU):
 
-    h1 = struct.Struct("H")
+    h1 = struct.Struct("!H")
 
     encap_type = None
 
@@ -633,8 +633,8 @@ class EncapsulationPDU(PDU):
         self.encaps = []
         self._kwset(b, kwargs)
         if b is not None:
-            count, = self.h1.unpack_from(b, 0)
-            offset = self.h1.size
+            count, = self.h1.unpack_from(b, self.h0.size)
+            offset = self.h0.size + self.h1.size
             for i in range(count):
                 encaps.append(self.encap_type(b, offset))
                 offset += len(encaps[-1])
