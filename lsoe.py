@@ -608,20 +608,18 @@ class ACKPDU(PDU):
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            acked_type, = self.h1.unpack_from(b, self.h0.size)
-            try:
-                self.acked_type = self.pdu_type_map[acked_type]
-            except:
-                raise PDUParseError("ACK of unknown PDU type {}".format(acked_type))
-            if not issubclass(self.acked_type, (OpenPDU, EncapsulationPDU)):
-                raise PDUParseError("ACK of un-ACKed PDU type {}".format(acked_type))
+            self.acked_type, = self.h1.unpack_from(b, self.h0.size)
+            if self.acked_type not in self.pdu_type_map:
+                raise PDUParseError("ACK of unknown PDU type {}".format(self.acked_type))                
+            if not issubclass(self.pdu_type_map[self.acked_type], (OpenPDU, EncapsulationPDU)):
+                raise PDUParseError("ACK of un-ACKed PDU type {}".format(self.pdu_type_map[self.acked_type]))
 
     def __bytes__(self):
-        assert issubclass(self.acked_type, (OpenPDU, EncapsulationPDU))
-        return self._b(self.h1.pack(self.acked_type.pdu_type))
+        assert issubclass(self.pdu_type_map[self.acked_type], (OpenPDU, EncapsulationPDU))
+        return self._b(self.h1.pack(self.acked_type))
 
     def __repr__(self):
-        return "<ACKPDU: {} ({})>".format(self.acked_type.__name__, self.acked_type.pdu_type)
+        return "<ACKPDU: {} ({})>".format(self.pdu_type_map[self.acked_type].__name__, self.acked_type)
 
 class EncapsulationPDU(PDU):
 
@@ -922,18 +920,14 @@ class Session:
         self.saw_last_keepalive = tornado.ioloop.IOLoop.current().time()
 
     def handle_ACKPDU(self, pdu):
-        #
-        # OK, maybe converting .acked_type back into a class wasn't
-        # such a great idea.  Clean up later if doing so looks cleaner.
-        #
-        if pdu.acked_type.pdu_type not in self.rxq:
+        if pdu.acked_type not in self.rxq:
             logger.info("%r received ACK with no relevant outgoing PDU: %r", self, pdu)
             logger.debug("%r rxq %r", self, self.rxq)
             return
-        logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.acked_type.pdu_type])
-        del self.rxq[pdu.acked_type.pdu_type]
-        next_pdu = self.deferred.pop(pdu.acked_type.pdu_type, None)
-        if isinstance(pdu, OpenPDU):
+        logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.acked_type])
+        del self.rxq[pdu.acked_type]
+        next_pdu = self.deferred.pop(pdu.acked_type, None)
+        if pdu.acked_type == OpenPDU.pdu_type:
             assert next_pdu is None
             self.our_open_acked = True
         elif next_pdu is not None:
@@ -943,7 +937,7 @@ class Session:
         if not self.is_open:
             logger.info("%r received encapsulation but connection not open: %r", self, pdu)
             return
-        self.send_ACK(pdu)
+        self.send_ack(pdu)
         self.report_rfc7752(pdu)
 
     def handle_IPv4EncapsulationPDU(self, pdu):
@@ -968,9 +962,7 @@ class Session:
         self.send_pdu(pdu)
 
     def send_ack(self, pdu):
-        ack = ACKPDU(acked_type = type(pdu))
-        logger.debug("%r ACKing %r with %r", self, pdu, ack)
-        self.send_pdu(ack)
+        self.send_pdu(ACKPDU(acked_type = pdu.pdu_type))
 
     def send_pdu(self, pdu):
         if isinstance(pdu, EncapsulationPDU) and pdu.pdu_type in self.rxq:
