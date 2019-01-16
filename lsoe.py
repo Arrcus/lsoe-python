@@ -863,13 +863,13 @@ class Timer:
     @tornado.gen.coroutine
     def wait(self):
         try:
-            logger.debug("%r sleeping")
+            logger.debug("%r sleeping", self)
             yield self.event.wait(timeout = self.wake)
         except tornado.gen.TimeoutError:
-            logger.debug("%r timer wakeup")
+            logger.debug("%r timer wakeup", self)
             return False
         else:
-            logger.debug("%r event wakeup")
+            logger.debug("%r event wakeup", self)
             return True
 
 
@@ -1005,10 +1005,14 @@ class Session:
 
     def check_timeouts(self, timer):
         logger.debug("%r checking timers", self)
+
         for pdu in self.rxq.values():
             if not timer.check_expired(pdu.rxmit_timeout):
-                logger.debug("%r scheduled wakeup %r for unchanged PDU %r rxmit_timeout %s", self, timer, pdu, pdu.rxmit_timeout)
+                logger.debug("%r scheduled wakeup %r for unchanged PDU %r rxmit_timeout %s (%s)",
+                             self, timer, pdu, pdu.rxmit_timeout,
+                             time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(pdu.rxmit_timeout)))
                 continue
+
             pdu.rxmit_dropsleft -= 1
             if pdu.rxmit_dropsleft <= 0:
                 logger.debug("%r too many drops for PDU %r, closing session", self, pdu)
@@ -1016,11 +1020,16 @@ class Session:
             if self.main.cfg.getboolean("retransmit-exponential-backoff"):
                 pdu.rxmit_interval *= 2
             pdu.rxmit_timeout = timer.wake_after(pdu.rxmit_interval)
-            logger.debug("%r retransmitting %r rxmit_timeout %s", self, pdu, pdu.rxmit_timeout)
+            logger.debug("%r retransmitting %r rxmit_timeout %s (%s)",
+                         self, pdu, pdu.rxmit_timeout,
+                         time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(pdu.rxmit_timeout)))
             self.main.io.write(pdu, self.macaddr)
+
         if self.is_open and (self.send_next_keepalive is None or timer.check_expired(self.send_next_keepalive)):
             self.send_next_keepalive = timer.wake_after(self.main.cfg.getfloat("keepalive-send-interval"))
-            logger.debug("%r sending keep-alive, next one scheduled for %s", self, self.send_next_keepalive)
+            logger.debug("%r sending keep-alive, next one scheduled for %s (%s)",
+                         self, self.send_next_keepalive,
+                         time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(self.send_next_keepalive)))
             self.send_pdu(KeepAlivePDU())
 
     def report_rfc7752(self, pdu):
@@ -1043,6 +1052,9 @@ class Session:
 class Main:
 
     def __init__(self):
+        os.environ.update(TZ = "UTC")
+        time.tzset()
+
         ap = argparse.ArgumentParser()
         ap.add_argument("-c", "--config",
                         help = "configuration file",
