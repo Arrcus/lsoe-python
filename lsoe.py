@@ -876,8 +876,9 @@ class Timer:
 class Session:
 
     def __repr__(self):
-        return "<Session {} {}>".format(
-            "+" if self.is_open else "",
+        return "<Session {} {} {}>".format(
+            "+" if self.is_open else "-",
+            self.ifname,
             ":".join("{:02x}".format(b) for b in self.macaddr))
 
     def __init__(self, main, macaddr, ifname):
