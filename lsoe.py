@@ -871,6 +871,8 @@ class Session:
         logger.debug("%r closing", self)
         if self.is_open:
             self.cleanup_rfc7752()
+        self.our_open_acked  = False
+        self.peer_open_nonce = None
         del self.main.sessions[self.macaddr]
 
     @property
@@ -1072,11 +1074,18 @@ class Main:
                 logger.debug("Received message from EtherIO layer, MAC address %s, interface %s", macaddr, ifname)
                 for i, line in enumerate(textwrap.wrap(" ".join("{:02x}".format(b) for b in msg))):
                     logger.debug("[%3d] %s", i, line)
-            if macaddr not in self.sessions:
-                logger.debug("Creating new session for MAC address %s, interface %s", macaddr, ifname)
-                self.sessions[macaddr] = Session(self, macaddr, ifname)
-            logger.debug("Dispatching to session %r for MAC address %s, interface %s", self.sessions[macaddr], macaddr, ifname)
+            try:
+                session = self.sessions[macaddr]
+            except KeyError:
+                session = self.sessions[macaddr] = Session(self, macaddr, ifname)
+                logger.debug("Created new session for MAC address %s, interface %s", macaddr, ifname)
+            logger.debug("Dispatching to session %r for MAC address %s, interface %s", session, macaddr, ifname)
+            was_open = session.is_open
             self.sessions[macaddr].recv(msg)
+            if session.is_open and not was_open:
+                logger.debug("Session %r just opened, stuffing initial encapsulations")
+                for pdu in self.ifs.get_encapsulations():
+                    session.send_pdu(pdu)
 
     @tornado.gen.coroutine
     def beacon(self):
