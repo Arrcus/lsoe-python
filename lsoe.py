@@ -546,18 +546,23 @@ class OpenPDU(PDU):
 
     pdu_type = 1
 
-    h1 = struct.Struct("4s10spH")
+    h1 = struct.Struct("4s10sB")
+    h2 = struct.Struct("H")
 
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            self.nonce, self.local_id, self.attributes, self.auth_length = self.h1.unpack_from(b, 0)
+            self.nonce, self.local_id, attribute_length = self.h1.unpack_from(b, 0)
+            self.attributes = b[h1.size : h1.size + attribute_length]
+            self.auth_length, = self.h2.unpack_from(h1.size + attribute_length)
             if self.auth_length != 0:
                 # Implementation restriction until LSOE signature spec written
                 raise PDUParseError("Received OpenPDU has non-zero auth_length {}".format(self.auth_length))
 
     def __bytes__(self):
-        return self._b(self.h1.pack(self.nonce, self.local_id, self.attributes, 0))
+        return self._b(self.h1.pack(self.nonce, self.local_id, len(self.attributes)) +
+                       self.attributes +
+                       self.h2.pack(0))
 
     def __repr__(self):
         return "<OpenPDU: {} {} {}>".format(
