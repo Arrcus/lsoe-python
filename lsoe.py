@@ -1047,7 +1047,7 @@ class Session:
 
     def report_rfc7752(self, pdu):
         # No real RFC 7752 code yet, so just blat to log for now
-        logger.info("RFC-7752 data: %r", pdu)
+        logger.info("%r RFC-7752 data: %r", self, pdu)
 
     def cleanup_rfc7752(self):
         for cls in PDU.pdu_type_map.values():
