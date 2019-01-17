@@ -123,6 +123,8 @@ logger = logging.getLogger(os.path.splitext(os.path.basename(sys.argv[0]))[0])
 #
 
 class MACAddress(bytes):
+    "MAC address -- 6 bytes, with pretty formatting."
+
     def __new__(cls, thing):
         if isinstance(thing, str):
             thing = bytes(int(i, 16) for i in thing.replace("-", ":").split(":"))
@@ -133,6 +135,8 @@ class MACAddress(bytes):
         return ":".join("{:02x}".format(b) for b in self)
 
 class IPAddress(bytes):
+    "IP address -- 4 or 16 bytes, with pretty formatting."
+
     def __new__(cls, thing):
         if isinstance(thing, str):
             thing = socket.inet_pton(socket.AF_INET6 if ":" in thing else socket.AF_INET, thing)
@@ -144,6 +148,7 @@ class IPAddress(bytes):
 
     @property
     def af(self):
+        "Address Family"
         return socket.AF_INET if len(self) == 4 else socket.AF_INET6
 
 
@@ -189,6 +194,7 @@ class Datagram:
 
     @classmethod
     def incoming(cls, b, sa_ll):
+        "Construct datagram for incoming data."
         version, frag, length, checksum = cls.h.unpack_from(b, 0)
         if len(b) > length:
             b = b[:length]
@@ -202,6 +208,7 @@ class Datagram:
             timestamp = tornado.ioloop.IOLoop.current().time())
 
     def verify(self):
+        "Verify content of an incoming datagram."
         if self.version != LSOE_VERSION:
             logger.debug("Datagram verification failed: bad version: expected %s, got %s",  LSOE_VERSION, self.version)
             return False
@@ -215,6 +222,7 @@ class Datagram:
 
     @classmethod
     def outgoing(cls, b, sa_ll, frag, last):
+        "Construct datagram for outgoing data."
         if last:
             frag |= Datagram.LAST_FLAG
         length = cls.h.size + len(b)
@@ -230,6 +238,7 @@ class Datagram:
 
     @classmethod
     def split_message(cls, b, macaddr, ifname):
+        "Split bytes of a PDU into datagrams."
         sa_ll = SockAddrLL(macaddr  = macaddr,
                            ifname   = ifname,
                            protocol = ETH_P_LSOE,
@@ -242,14 +251,17 @@ class Datagram:
 
     @property
     def is_final(self):
+        "Is this the last datragram in a PDU?"
         return self.frag & self.LAST_FLAG != 0
 
     @property
     def dgram_number(self):
+        "Datagram number (zero-based) within a PDU."
         return self.frag & ~self.LAST_FLAG
 
     @classmethod
     def _sbox_checksum(cls, b, frag, length, version = LSOE_VERSION):
+        "Compute the LSOE S-box checksum."
         pkt = cls.h.pack(version, frag, length, 0) + b
         sum, result = [0, 0, 0, 0], 0
         for i, b in enumerate(pkt):
@@ -262,6 +274,7 @@ class Datagram:
 
     @property
     def payload(self):
+        "Payload (upper level content) from a datagram."
         return self.bytes[self.h.size : self.h.size + self.length]
 
 class EtherIO:
@@ -275,13 +288,13 @@ class EtherIO:
     """
 
     class MACDB:
+        "Entry in EtherIO's internal map of MAC addresses to interfaces."
         def __init__(self, macaddr, ifname):
             self.macaddr = macaddr
             self.ifname = ifname
             self.timestamp = None
 
     def __init__(self, cfg):
-        # Do we need to do anything with multicast setup?
         self.cfg = cfg
         self.macdb = {}
         self.dgrams = {}
@@ -289,31 +302,30 @@ class EtherIO:
         self.s = socket.socket(socket.PF_PACKET, socket.SOCK_DGRAM, socket.htons(ETH_P_LSOE))
         self.ioloop = tornado.ioloop.IOLoop.current()
         self.ioloop.add_handler(self.s, self._handle_read,  tornado.ioloop.IOLoop.READ)
-        #self.ioloop.add_handler(self.s, self._handle_error, tornado.ioloop.IOLoop.ERROR)
         tornado.ioloop.PeriodicCallback(self._gc, self.cfg.getfloat("reassembly-timeout") * 500)
-        # Might need one or more self.ioloop.spawn_callback() calls somewhere
 
-    # Returns a Future, awaiting which returns a (bytes, macaddr, ifname) tuple
+    # Not really a coroutine, just plays one on TV
     def read(self):
+        "Coroutine returning (bytes, macaddr, ifname) tuple."
         return self.q.get()
 
-    # Put a PDU back in the read queue, to simplify session restart
     def unread(self, msg, macaddr, ifname):
+        "Stuff a PDU back into the read queue, to simplify session restart."
         self.q.put_nowait((bytes(msg), macaddr, ifname))
 
-    # Convert PDU to bytes, breaks into datagrams, and sends them
     def write(self, pdu, macaddr, ifname = None):
+        "Convert a PDU to bytes, breaks into datagrams, and send them."
         if ifname is None:
             ifname = self.macdb[macaddr].ifname
         for d in Datagram.split_message(bytes(pdu), macaddr, ifname):
             self.s.sendto(d.bytes, d.sa_ll)
 
-    # Tears down I/O
     def close(self):
+        "Tear down this EtherIO instance."
         self.ioloop.remove_handler(self.s)
 
-    # Internal handler for READ events
     def _handle_read(self, fd, events):
+        "Internal handler for READ events."
         assert fd == self.s
         pkt, sa_ll = self.s.recvfrom(ETH_DATA_LEN)
         sa_ll = SockAddrLL(*sa_ll)
@@ -350,8 +362,8 @@ class EtherIO:
         del self.dgrams[macaddr]
         self.q.put_nowait((b"".join(d.payload for d in rq), macaddr, sa_ll.ifname))
 
-    # Garbage collect incomplete messages and stale MAC addresses
     def _gc(self):
+        "Internal garbage collector for incomplete messages and stale MAC addresses."
         logger.debug("EtherIO GC")
         now = self.ioloop.time()
         threshold = now - self.cfg.getfloat("reassembly-timeout")
@@ -369,14 +381,19 @@ class EtherIO:
 
 
 #
-# Presentation layer: Encapsulations
+# Presentation layer: Encapsulations (payload of the encapsulation PDU classes)
 #
 
 class Encapsulation:
+    """
+    Abstract base for encapsulation classes.
+    """
 
-    _primary_flag  = 0x80
-    _loopback_flag = 0x40
-    flags = 0
+    _primary_flag  = 0x80       # Bit mask for the "primary" flag
+    _loopback_flag = 0x40       # Bit mask for the "loopback" flag
+    flags = 0                   # Default flags byte to zero
+
+    # Property methods to make the flags act like Python booleans
 
     @property
     def primary(self):
@@ -401,11 +418,15 @@ class Encapsulation:
             self.flags &= ~self._loopback_flag
 
     def _kwset(self, b, offset, kwargs):
+        "Keyword-based initialization."
         assert (b is None and offset is None) or not kwargs
         for k, v in kwargs.items():
             setattr(self, k, v)
 
 class IPEncapsulation(Encapsulation):
+    """
+    Base for IP encapsulation classes.
+    """
 
     def __init__(self, b = None, offset = None, **kwargs):
         self._kwset(b, offset, kwargs)
@@ -419,17 +440,21 @@ class IPEncapsulation(Encapsulation):
         return self.h1.pack(self.flags, self.ipaddr, self.prefixlen)
 
     def __repr__(self):
-        return "<{}: {}{} {}/{}>".format(
+        return "<{}: {}{}{}/{}>".format(
             self.__class__.__name__,
-            "<P>" if self.primary else "",
-            "<L>" if self.loopback else "",
+            "<P> " if self.primary else "",
+            "<L> " if self.loopback else "",
             socket.inet_ntop(socket.AF_INET if len(self.ipaddr) == 4 else socket.AF_INET6, self.ipaddr),
             self.prefixlen)
 
 class MPLSIPEncapsulation(Encapsulation):
-
-    # Pretend for now that we can treat an MPLS label as an opaque
-    # three-octet string rather than needing get/set properties.
+    """
+    Base for MPLS encapsulation classes.
+    
+    For now we pretend that we can treat an MPLS label as an opaque
+    three-octet string rather than needing yet another class with
+    get/set properties.
+    """
 
     h1 = struct.Struct("!BB")
     h2 = struct.Struct("!3s")
@@ -463,15 +488,19 @@ class MPLSIPEncapsulation(Encapsulation):
             self.prefixlen)
 
 class IPv4Encapsulation(IPEncapsulation):
+    "IPv4 encapsulation."
     h1 = struct.Struct("!B4sB")
 
 class IPv6Encapsulation(IPEncapsulation):
+    "IPv6 encapsulation."
     h1 = struct.Struct("!B16sB")
 
 class MPLSIPv4Encapsulation(MPLSIPEncapsulation):
+    "MPLS IPv4 encapsulation."
     h3 = struct.Struct("!4sB")
 
 class MPLSIPv6Encapsulation(MPLSIPEncapsulation):
+    "MPLS IPv6 encapsulation."
     h3 = struct.Struct("!16sB")
 
 
@@ -508,9 +537,9 @@ class PDU:
     Abstract base class for PDUs.
     """
 
-    pdu_type = None
-    pdu_type_map = {}
-    acked_pdu_classes = ()
+    pdu_type = None             # Each subclass must override this
+    pdu_type_map = {}           # Class data: map pdu_number -> PDU subclass, built up by @register_pdu decorator
+    acked_pdu_classes = ()      # Class data: tuple of ACKed types, built up by @register_acked_pdu decorator
 
     h0 = struct.Struct("!BH")
 
@@ -523,21 +552,25 @@ class PDU:
 
     @classmethod
     def parse(cls, b):
+        "Parse an incoming PDU."
         pdu_type, pdu_length = cls.h0.unpack_from(b, 0)
         if len(b) != pdu_length:
             raise PDUParseError("Unexpected PDU length: len(b) {}, pdu_length {}".format(len(b), pdu_length))
         return cls.pdu_type_map[pdu_type](b)
 
     def _b(self, b):
+        "Construct outermost TLV wrapper of a PDU."
         return self.h0.pack(self.pdu_type, self.h0.size + len(b)) + b
 
     def _kwset(self, b, kwargs):
+        "Keyword-based initialization."
         assert b is None or not kwargs
         for k, v in kwargs.items():
             setattr(self, k, v)
 
 @register_pdu
 class HelloPDU(PDU):
+    "HELLO PDU."
 
     pdu_type = 0
 
@@ -557,6 +590,7 @@ class HelloPDU(PDU):
 
 @register_acked_pdu
 class OpenPDU(PDU):
+    "OPEN PDU."
 
     pdu_type = 1
 
@@ -598,6 +632,7 @@ class OpenPDU(PDU):
 
 @register_pdu
 class KeepAlivePDU(PDU):
+    "KEEPALIVE PDU."
 
     pdu_type = 2
 
@@ -614,6 +649,7 @@ class KeepAlivePDU(PDU):
 
 @register_pdu
 class ACKPDU(PDU):
+    "ACK PDU."
 
     pdu_type = 3
 
@@ -639,6 +675,7 @@ class ACKPDU(PDU):
 
 @register_pdu
 class ErrorPDU(PDU):
+    "ERROR PDU."
 
     pdu_type = 4
 
@@ -664,6 +701,12 @@ class ErrorPDU(PDU):
             self.pdu_type_map[self.ack_type].__name__, self.ack_type, self.error_code, self.error_hint)
 
 class EncapsulationPDU(PDU):
+    """"
+    Base for encapsulation PDU classes.
+
+    All of this are basically just a list of zero or more instances
+    of the corresponding encapsulation class.
+    """
 
     h1 = struct.Struct("!H")
 
@@ -687,26 +730,40 @@ class EncapsulationPDU(PDU):
 
 @register_acked_pdu
 class IPv4EncapsulationPDU(EncapsulationPDU):
+    "IPv4 encapsulation PDU."
     pdu_type = 5
     encap_type = IPv4Encapsulation
 
 @register_acked_pdu
 class IPv6EncapsulationPDU(EncapsulationPDU):
+    "IPv6 encapsulation PDU."
     pdu_type = 6
     encap_type = IPv6Encapsulation
 
 @register_acked_pdu
 class MPLSIPv4EncapsulationPDU(EncapsulationPDU):
+    "MPLS IPv4 encapsulation PDU."
     pdu_type = 7
     encap_type = MPLSIPv4Encapsulation
 
 @register_acked_pdu
 class MPLSIPv6EncapsulationPDU(EncapsulationPDU):
+    "MPLS IPv6 encapsulation PDU."
     pdu_type = 8
     encap_type = MPLSIPv6Encapsulation
 
 @register_acked_pdu
 class VendorPDU(PDU):
+    """
+    VENDOR PDU.
+
+    You can hook into the receive process for VENDOR PDUs carrying
+    particular enterprise numbers by creating entries in
+    VendorPDU.vendor_dispatch[]: the key should be a Python int
+    (the enterprise number), while the value should be a Python
+    callable which expects to receive the session instance and
+    the PDU instance as arguments.
+    """
 
     pdu_type = 255
 
@@ -734,6 +791,7 @@ class VendorPDU(PDU):
 #
 
 class Interface:
+    "A network interface as reported by PyRoute2."
 
     def __init__(self, index, name, macaddr, flags):
         self.index   = index
@@ -745,6 +803,7 @@ class Interface:
                      self.name, self.index, self.macaddr, self.flags)
 
     def add_ipaddr(self, af, ipaddr, prefixlen):
+        "Record an IP address for this interface."
         if af not in self.ipaddrs:
             self.ipaddrs[af] = []
         self.ipaddrs[af].append((ipaddr, prefixlen))
@@ -752,24 +811,33 @@ class Interface:
                      self.name, self.index, af, ipaddr, prefixlen)
 
     def del_ipaddr(self, af, ipaddr, prefixlen):
+        "Forget an IP address for this interface."
         self.ipaddrs[af].remove((ipaddr, prefixlen))
         logger.debug("Interface %s [%s] del af %s %s/%s",
                      self.name, self.index, af, ipaddr, prefixlen)
 
     def update_flags(self, flags):
+        "Update this interface's flags."
         self.flags = flags
         logger.debug("Interface %s [%s] flags %s",
                      self.name, self.index, flags)
 
     @property
     def is_up(self):
+        "Is this interface up?"
         return self.flags & pyroute2.netlink.rtnl.ifinfmsg.IFF_UP != 0
 
     @property
     def is_loopback(self):
+        "Is this a loopback interface?"
         return self.flags & pyroute2.netlink.rtnl.ifinfmsg.IFF_LOOPBACK != 0
 
 class Interfaces(dict):
+    """
+    Interface database.  This hooks into PyRoute2 with a callback function
+    so that we get update messages when interfaces or their addresses are
+    added or deleted.
+    """
 
     def __init__(self):
         logger.debug("Initializing interfaces")
@@ -796,13 +864,16 @@ class Interfaces(dict):
             self.ip.fileno(), self._handle_event, tornado.ioloop.IOLoop.READ)
         logger.debug("Done initializing interfaces")
 
-    # Returns a Future, which returns an EncapsulationPDU
+    # Not really a coroutine, just plays one on TV
     def read_updates(self):
+        "Coroutine returning an EncapsulationPDU to be sent to all sessions."
         return self.q.get()
 
-    # Doc sketchy on RTM_DELLINK, may need to experiment
+    # Documentation on RTM_DELLINK is sketchy, we may need to
+    # experiment to figure out how that really works.
 
     def _handle_event(self, *ignored):
+        "Internal callback handler to receive change events from PyRoute2."
         logger.debug("Interface updates")
         changed = set()
         for msg in self.ip.get():
@@ -830,12 +901,25 @@ class Interfaces(dict):
         logger.debug("Done interface updates")
 
     def get_encapsulations(self):
+        "Get a current set of encapsulation PDUs to send on session open."
         return (self._get_IPv4EncapsulationPDU(),
                 self._get_IPv6EncapsulationPDU(),
                 self._get_MPLSIPv4EncapsulationPDU(),
                 self._get_MPLSIPv6EncapsulationPDU())
 
     def _get_IPEncapsulationPDU(self, af, cls):
+        """
+        Common code to construct encapsulation PDUs from this database.
+
+        Figuring out what to put in the "primary" and "loopback" fields
+        needs work.  "Primary" probably needs to come from configuration.
+        Loopback is currently set based on the IFF_LOOPBACK flag, which
+        may be good enough or may require a configuration override.
+
+        We may also need configuration to suppress interfaces we don't
+        really want to expose (eg, docker0).
+        """
+
         pdu = cls()
         for iface in self.values():
             if af in iface.ipaddrs:
@@ -848,17 +932,22 @@ class Interfaces(dict):
         return pdu
 
     def _get_IPv4EncapsulationPDU(self):
+        "Generate an IPv4 encapsulation from the database."
         return self._get_IPEncapsulationPDU(socket.AF_INET,  IPv4EncapsulationPDU)
 
     def _get_IPv6EncapsulationPDU(self):
+        "Generate an IPv6 encapsulation from the database."
         return self._get_IPEncapsulationPDU(socket.AF_INET6, IPv6EncapsulationPDU)
 
-    # Implementation restriction: we don't support MPLS yet, so only empty MPLS encapsulations
+    # Implementation restriction: we don't support MPLS yet, so we
+    # only generate empty MPLS encapsulation PDUs.
 
     def _get_MPLSIPv4EncapsulationPDU(self):
+        "Generate an (empty) MPLS IPv4 encapsulation from the database."
         return MPLSIPv4EncapsulationPDU()
 
     def _get_MPLSIPv6EncapsulationPDU(self):
+        "Generate an (empty) MPLS IPv6 encapsulation from the database."
         return MPLSIPv6EncapsulationPDU()
 
 
@@ -868,6 +957,25 @@ class Interfaces(dict):
 #
 
 class Timer:
+    """
+    Simplistic timer object to multiplex an arbitrary number of
+    timeout events by waiting on a single Event object with a timeout.
+
+    Basic model here is that one creates a new Timer() at the start of
+    each pass through the event loop, uses it to schedule and check
+    all the individual timeout events while simultaneously determining
+    what the earliest wakeup time is for the entire set of timeouts,
+    then go to sleep for that long.  If no timers are set at all, we
+    just wait for an external signal to the Event (which occurs when,
+    eg, a Session stuffs a new PDU into a retransmission queue.
+
+    This is probably not the most efficient way to do this, but it's
+    simple, and it's not all that expensive, since all the checks
+    involved are simple numeric comparisons.  If this turns out to be
+    a bottleneck, we'll write something better, but for now the
+    simplicity of this approach wins over premature optimization.
+    """
+
 
     def __init__(self, event):
         self.now   = tornado.ioloop.IOLoop.current().time()
@@ -889,7 +997,7 @@ class Timer:
     # So shake the bugs out of this code before trying that.
 
     def wake_after(self, delay):
-        # delay must be a relative time
+        "Schedule wakeup after specified delay (must be a relative time)."
         assert delay >= 0 and delay < self.now
         when = self.now + delay
         if self.wake is None or when < self.wake:
@@ -898,7 +1006,7 @@ class Timer:
         return when
 
     def check_expired(self, when):
-        # when must be an absolute time
+        "Check whether an absolute time has passed, schedule wakeup if not."
         assert when * 2 > self.now
         expired = when <= self.now
         if not expired and (self.wake is None or when < self.wake):
@@ -908,6 +1016,7 @@ class Timer:
 
     @tornado.gen.coroutine
     def wait(self):
+        "Wait for event or first timeout."
         try:
             logger.debug("%r sleeping", self)
             yield self.event.wait(timeout = self.wake)
@@ -920,6 +1029,14 @@ class Timer:
 
 
 class Session:
+    """
+    LSOE session, between us and one neighbor.
+    Encapsulates state machine and most PDU processing.
+
+    At present we have no RFC 7752 implementation available,
+    so we just log the data we would otherwise be sending
+    northbound via RFC 7752.
+    """
 
     def __repr__(self):
         return "<Session {} {} {}>".format(
@@ -943,6 +1060,7 @@ class Session:
         logger.debug("%r init", self)
 
     def close(self):
+        "Close and delete this session."
         logger.debug("%r closing", self)
         if self.is_open:
             self.cleanup_rfc7752()
@@ -952,9 +1070,11 @@ class Session:
 
     @property
     def is_open(self):
+        "Has this session reached the Open state?"
         return self.our_open_acked and self.peer_open_nonce is not None
 
     def recv(self, msg):
+        "Receive and process one PDU."
         try:
             pdu = PDU.parse(msg)
         except PDUParseError as e:
@@ -964,9 +1084,23 @@ class Session:
             self.dispatch[pdu.pdu_type](pdu)
 
     def handle_HelloPDU(self, pdu):
+        "Process a HELLO PDU -- triggers start of Open dance if haven't already."
         self.send_open_maybe()
 
     def handle_OpenPDU(self, pdu):
+        """
+        Process an OPEN PDU.
+
+        This can reset an existing open session if the nonce doesn't match,
+        because changed nonce is assumed to mean peer has restarted.
+
+        This may trigger us to send an OPEN PDU back to the peer, if
+        we haven't already done that.
+
+        This may cause us to reach the Open state, if peer has already
+        ACKed an OPEN PDU we sent.
+        """
+
         assert pdu.nonce is not None
         if pdu.nonce == self.peer_open_nonce:
             logger.info("%r discarding duplicate OpenPDU: %r", self, pdu)
@@ -980,12 +1114,14 @@ class Session:
         self.saw_keepalive()
 
     def handle_KeepAlivePDU(self, pdu):
+        "Process a KEEPALIVE PDU -- update timer or trigger OPEN, as appropriate."
         if self.is_open:
             self.saw_keepalive()
         else:
             self.send_open_maybe()
 
     def handle_ACKPDU(self, pdu):
+        "Process an ACK PDU, which may cause the session to reach the Open state."
         if pdu.ack_type not in self.rxq:
             logger.info("%r received ACK with no relevant outgoing PDU: %r", self, pdu)
             return
@@ -993,6 +1129,12 @@ class Session:
         self.handle_acknak(pdu)
 
     def handle_ErrorPDU(self, pdu):
+        """
+        Process an ERROR PDU, which may cause the session to reach the Open state.
+
+        If that seems weird to you, well, it confuses at least one of the authors too.
+        """
+
         if pdu.ack_type not in self.rxq:
             logger.info("%r received Error with no relevant outgoing PDU: %r", self, pdu)
             return
@@ -1000,6 +1142,7 @@ class Session:
         self.handle_acknak(pdu)
 
     def handle_acknak(self, pdu):
+        "Common code for processing ACK and ERROR PDUs -- may dispatch to vendor-supplied hook."
         del self.rxq[pdu.ack_type]
         next_pdu = self.deferred.pop(pdu.ack_type, None)
         if pdu.ack_type == OpenPDU.pdu_type:
@@ -1015,6 +1158,7 @@ class Session:
                     logger.exception("%r unhandled exception running %r on %r", self, pdu.vendor_hook, pdu)
 
     def handle_encapsulation(self, pdu):
+        "Common code for processing encapsulation PDUs."
         if not self.is_open:
             logger.info("%r received encapsulation but connection not open: %r", self, pdu)
             return
@@ -1022,18 +1166,23 @@ class Session:
         self.report_rfc7752(pdu)
 
     def handle_IPv4EncapsulationPDU(self, pdu):
+        "Handle an IPv4 encapsulation PDU."
         self.handle_encapsulation(pdu)
 
     def handle_IPv6EncapsulationPDU(self, pdu):
+        "Handle an IPv6 encapsulation PDU."
         self.handle_encapsulation(pdu)
 
     def handle_MPLSIPv4EncapsulationPDU(self, pdu):
+        "Handle an MPLS IPv4 encapsulation PDU."
         self.handle_encapsulation(pdu)
 
     def handle_MPLSIPv6EncapsulationPDU(self, pdu):
+        "Handle an MPLS IPv6 encapsulation PDU."
         self.handle_encapsulation(pdu)
 
     def handle_VendorPDU(self, pdu):
+        "Handle a VENDOR PDU -- may dispatch to vendor-supplied hook."
         if not self.is_open:
             logger.info("%r received VendorPDU but connection not open: %r", self, pdu)
             return
@@ -1046,10 +1195,12 @@ class Session:
                                  self, self.vendor_dispatch[self.enterprise_number], pdu)
 
     def saw_keepalive(self):
+        "Record keepalive timestamp, if and only if session is open."
         if self.is_open:
             self.saw_last_keepalive = tornado.ioloop.IOLoop.current().time()
 
     def send_open_maybe(self, attributes = b""):
+        "Send an OPEN PDU if appropriate in our session current state."
         if self.our_open_acked:
             logger.debug("%r not sending OpenPDU because our Open has already been ACKed", self)
         elif OpenPDU.pdu_type in self.rxq:
@@ -1058,9 +1209,15 @@ class Session:
             self.send_pdu(OpenPDU(local_id = self.main.local_id, attributes = attributes))
 
     def send_ack(self, pdu):
+        "Send an ACK PDU."
         self.send_pdu(ACKPDU(ack_type = pdu.pdu_type))
 
+    def send_error(self, pdu, code, hint = 0):
+        "Send an ERROR PDU."
+        self.send_pdu(ErrorPDU(ack_type = pdu.pdu_type, error_code = code, error_hint = hint))
+
     def send_pdu(self, pdu):
+        "Send a PDU, deferring it or setting up for retransmission if appropriate."
         if pdu.pdu_type != OpenPDU.pdu_type and isinstance(pdu, PDU.acked_pdu_classes) and pdu.pdu_type in self.rxq:
             logger.debug("%r deferring %r", self, pdu)
             self.deferred[pdu.pdu_type] = pdu
@@ -1080,6 +1237,7 @@ class Session:
             self.main.wake.set()
 
     def check_timeouts(self, timer):
+        "Check all the little timeout values in this session."
         logger.debug("%r checking timers", self)
 
         if self.is_open and timer.now > self.saw_last_keepalive + self.main.cfg.getfloat("keepalive-receive-timeout"):
@@ -1116,10 +1274,11 @@ class Session:
             self.send_pdu(KeepAlivePDU())
 
     def report_rfc7752(self, pdu):
-        # No real RFC 7752 code yet, so just blat to log for now
+        "Toss RFC 7752 data at log, since we have no real RFC 7752 code (yet)."
         logger.info("%r RFC-7752 data: %r", self, pdu)
 
     def cleanup_rfc7752(self):
+        "Clear all RFC 7752 data, by synthesizing empty encapsulation PDUs."
         for cls in PDU.pdu_type_map.values():
             if issubclass(cls, EncapsulationPDU):
                 self.report_rfc7752(cls())
@@ -1130,9 +1289,17 @@ class Session:
 # Main program
 #
 
-# Need something here to gc dead sessions?
-
 class Main:
+    """
+    LSOE main program.  This is intended to be run under Tornado's .run_sync() method.
+    Calling sequence is important: run_sync(Main().main), because there are certain things
+    we need to do before the Tornado I/O loop starts, and we need to supply a coroutine
+    to .run_sync().
+    """
+
+    # __init__() in this class handles things that need to be done *before* Tornado's
+    # I/O loop starts.  Mostly this means configuring the logging module, along with
+    # everything that depends upon.
 
     def __init__(self):
         os.environ.update(TZ = "UTC")
@@ -1166,14 +1333,20 @@ class Main:
         self.configure_id()
 
     def configure_id(self):
-        # Separate method because set of text formats we might have to
-        # parse is a bit open-ended.  For now we only support a hex
-        # string (with optional ":", "-", or whitespace separation
-        # between bytes).
-        #
-        # For convenience during initial testing we also support a
-        # default, which may go away, leaving this as mandatory
-        # configuration, thus requiring a config file.  Dunno yet.
+        """
+        Configure the "Local ID" of this LSOE instance.
+
+        This is a separate method because set of text formats we might
+        have to parse is a bit open-ended.  For now we only support a
+        hex string (with optional ":", "-", or whitespace separation
+        between bytes).
+
+        For convenience during initial testing, we also support a
+        default based on the "product_uuid" value off in Linux's /sys
+        tree.  This may go away, at which point configuration of
+        "local ID" would become mandatory, as would the configuration
+        file.  Dunno yet.
+        """
 
         try:
             text = self.cfg["local-id"]
@@ -1187,6 +1360,7 @@ class Main:
 
     @tornado.gen.coroutine
     def main(self):
+        "Main coroutine, initializes a few things then waits for other coroutines."
         logger.debug("Starting")
         self.sessions = {}
         self.ifs  = Interfaces()
@@ -1194,19 +1368,21 @@ class Main:
         self.wake = tornado.locks.Event()
 
         wait_iterator = tornado.gen.WaitIterator(
-            self.receiver(), self.beacon(), self.timers(), self.interface_tracker())
+            self.pdu_receiver(), self.hello_beacon(), self.session_timers(), self.interface_tracker())
 
         while not wait_iterator.done():
             yield wait_iterator.next()
 
     def log_raw_pdu(self, msg, macaddr, ifname):
+        "More than you ever wanted to know about bytes received from the wire."
         logger.debug("Received PDU from EtherIO layer, MAC address %s, interface %s", macaddr, ifname)
         for i, line in enumerate(textwrap.wrap(" ".join("{:02x}".format(b) for b in msg))):
             logger.debug("[%3d] %s", i, line)
 
     @tornado.gen.coroutine
-    def receiver(self):
-        logger.debug("Starting receiver task")
+    def pdu_receiver(self):
+        "Coroutine PDU receiver loop."
+        logger.debug("Starting pdu_receiver task")
         while True:
             msg, macaddr, ifname = yield self.io.read()
             if self.debug > 1:
@@ -1224,10 +1400,11 @@ class Main:
                     session.send_pdu(pdu)
 
     @tornado.gen.coroutine
-    def beacon(self):
-        logger.debug("Starting beacon task")
+    def hello_beacon(self):
+        "Coroutine HELLO transmission loop."
+        logger.debug("Starting hello_beacon task")
         while True:
-            logger.debug("Running beacon task")
+            logger.debug("Running hello_beacon task")
             for iface in self.ifs.values():
                 if iface.is_loopback:
                     logger.debug("Skipping Hello on loopback interface %s", iface.name)
@@ -1238,11 +1415,12 @@ class Main:
                 pdu = HelloPDU(my_macaddr = iface.macaddr)
                 logger.debug("Multicasting %r to %s", pdu, iface.name)
                 self.io.write(pdu, LSOE_HELLO_MACADDR, iface.name)
-            logger.debug("Sleeping beacon task")
+            logger.debug("Sleeping hello_beacon task")
             yield tornado.gen.sleep(self.cfg.getfloat("hello-interval"))
 
     @tornado.gen.coroutine
-    def timers(self):
+    def session_timers(self):
+        "Coroutine handling all the session timers."
         logger.debug("Starting timers task")
         while True:
             timer = Timer(self.wake)
@@ -1253,12 +1431,20 @@ class Main:
 
     @tornado.gen.coroutine
     def interface_tracker(self):
+        "Couroutine sending interface changes to existing sessions."
         logger.debug("Starting interface_tracker task")
         while True:
             pdu = yield self.ifs.read_updates()
             for session in self.sessions.values():
                 if session.is_open:
                     session.send_pdu(copy.copy(pdu))
+
+# Python voodoo to call Main().main().  See calling sequence notes in
+# Main class.  Be careful about exceptions which should cause quiet
+# exits.  In theory we might want to do some kind of final cleanup
+# here (perhaps in a "finally:" clause to clear out RFC 7752 data if
+# we can, but since this process is exiting by that point there's not
+# a lot of other cleanup we can or should do.
 
 if __name__ == "__main__":
     try:
