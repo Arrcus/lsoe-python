@@ -917,9 +917,10 @@ class Session:
         self.saw_keepalive()
 
     def handle_KeepAlivePDU(self, pdu):
-        if not self.is_open:
-            logger.info("%r received keepalive but connection not open: %r", self, pdu)
-        self.saw_keepalive()
+        if self.is_open:
+            self.saw_keepalive()
+        else:
+            self.send_open_maybe()
 
     def handle_ACKPDU(self, pdu):
         if pdu.acked_type not in self.rxq:
