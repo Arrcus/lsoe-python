@@ -480,12 +480,22 @@ class MPLSIPv6Encapsulation(MPLSIPEncapsulation):
 
 def register_pdu(cls):
     """
-    Decorator to add a PDU class to the PDU dispatch table.
+    Decorator to register a PDU class in the PDU dispatch table.
     """
 
     assert cls.pdu_type is not None
     assert cls.pdu_type not in cls.pdu_type_map
     cls.pdu_type_map[cls.pdu_type] = cls
+    return cls
+
+def register_acked_pdu(cls):
+    """
+    Decorator to register a PDU class in the PDU dispatch table
+    and mark it as a class for which we expect to see ACKs.
+    """
+
+    cls = register_pdu(cls)
+    PDU.acked_pdu_classes = PDU.acked_pdu_classes + (cls,)
     return cls
 
 class PDUParseError(Exception):
@@ -498,6 +508,7 @@ class PDU:
 
     pdu_type = None
     pdu_type_map = {}
+    acked_pdu_classes = ()
 
     h0 = struct.Struct("!BH")
 
@@ -542,7 +553,7 @@ class HelloPDU(PDU):
     def __repr__(self):
         return "<HelloPDU: {}>".format(self.my_macaddr)
 
-@register_pdu
+@register_acked_pdu
 class OpenPDU(PDU):
 
     pdu_type = 1
@@ -614,11 +625,11 @@ class ACKPDU(PDU):
             self.ack_type, = self.h1.unpack_from(b, self.h0.size)
             if self.ack_type not in self.pdu_type_map:
                 raise PDUParseError("ACK of unknown PDU type {}".format(self.ack_type))                
-            if not issubclass(self.pdu_type_map[self.ack_type], (OpenPDU, EncapsulationPDU, VendorPDU)):
+            if not issubclass(self.pdu_type_map[self.ack_type], PDU.acked_pdu_classes):
                 raise PDUParseError("ACK of un-ACKed PDU type {}".format(self.pdu_type_map[self.ack_type]))
 
     def __bytes__(self):
-        assert issubclass(self.pdu_type_map[self.ack_type], (OpenPDU, EncapsulationPDU, VendorPDU))
+        assert issubclass(self.pdu_type_map[self.ack_type], PDU.acked_pdu_classes)
         return self._b(self.h1.pack(self.ack_type))
 
     def __repr__(self):
@@ -636,19 +647,19 @@ class ErrorPDU(PDU):
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            self.nak_type, self.error_code, self.error_hint = self.h1.unpack_from(b, self.h0.size)
-            if self.nak_type not in self.pdu_type_map:
-                raise PDUParseError("NAK of unknown PDU type {}".format(self.nak_type))                
-            if not issubclass(self.pdu_type_map[self.nak_type], (OpenPDU, EncapsulationPDU, VendorPDU)):
-                raise PDUParseError("NAK of un-ACKed PDU type {}".format(self.pdu_type_map[self.nak_type]))
+            self.ack_type, self.error_code, self.error_hint = self.h1.unpack_from(b, self.h0.size)
+            if self.ack_type not in self.pdu_type_map:
+                raise PDUParseError("NAK of unknown PDU type {}".format(self.ack_type))                
+            if not issubclass(self.pdu_type_map[self.ack_type], PDU.acked_pdu_classes):
+                raise PDUParseError("NAK of un-ACKed PDU type {}".format(self.pdu_type_map[self.ack_type]))
 
     def __bytes__(self):
-        assert issubclass(self.pdu_type_map[self.nak_type], (OpenPDU, EncapsulationPDU, VendorPDU))
-        return self._b(self.h1.pack(self.nak_type, self.error_code, self.error_hint))
+        assert issubclass(self.pdu_type_map[self.ack_type], PDU.acked_pdu_classes)
+        return self._b(self.h1.pack(self.ack_type, self.error_code, self.error_hint))
 
     def __repr__(self):
         return "<ErrorPDU: {} ({}) {} {}>".format(
-            self.pdu_type_map[self.nak_type].__name__, self.nak_type, self.error_code, self.error_hint)
+            self.pdu_type_map[self.ack_type].__name__, self.ack_type, self.error_code, self.error_hint)
 
 class EncapsulationPDU(PDU):
 
@@ -672,27 +683,27 @@ class EncapsulationPDU(PDU):
     def __repr__(self):
         return "<{}: {!r}>".format(self.__class__.__name__, self.encaps)
 
-@register_pdu
+@register_acked_pdu
 class IPv4EncapsulationPDU(EncapsulationPDU):
     pdu_type = 5
     encap_type = IPv4Encapsulation
 
-@register_pdu
+@register_acked_pdu
 class IPv6EncapsulationPDU(EncapsulationPDU):
     pdu_type = 6
     encap_type = IPv6Encapsulation
 
-@register_pdu
+@register_acked_pdu
 class MPLSIPv4EncapsulationPDU(EncapsulationPDU):
     pdu_type = 7
     encap_type = MPLSIPv4Encapsulation
 
-@register_pdu
+@register_acked_pdu
 class MPLSIPv6EncapsulationPDU(EncapsulationPDU):
     pdu_type = 8
     encap_type = MPLSIPv6Encapsulation
 
-@register_pdu
+@register_acked_pdu
 class VendorPDU(PDU):
 
     pdu_type = 255
@@ -977,6 +988,16 @@ class Session:
             logger.info("%r received ACK with no relevant outgoing PDU: %r", self, pdu)
             return
         logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.ack_type])
+        self.handle_acknak(pdu)
+
+    def handle_ErrorPDU(self, pdu):
+        if pdu.ack_type not in self.rxq:
+            logger.info("%r received Error with no relevant outgoing PDU: %r", self, pdu)
+            return
+        logger.debug("%r received Error %r for PDU %r", self, pdu, self.rxq[pdu.ack_type])
+        self.handle_acknak(pdu)
+
+    def handle_acknak(self, pdu):
         del self.rxq[pdu.ack_type]
         next_pdu = self.deferred.pop(pdu.ack_type, None)
         if pdu.ack_type == OpenPDU.pdu_type:
@@ -985,17 +1006,11 @@ class Session:
             self.saw_keepalive()
         elif next_pdu is not None:
             self.send_pdu(next_pdu)
-            if pdu.ack_type == VendorPDU.pdu_type and ACKPDU.vendor_hook is not None:
+            if pdu.vendor_hook is not None:
                 try:
-                    ACKPDU.vendor_hook(self, pdu)
+                    pdu.vendor_hook(self, pdu)
                 except:
-                    logger.exception("%r unhandled exception running %r on %r", self, ACKPDU.vendor_hook, pdu)
-
-    def handle_ErrorPDU(self, pdu):
-        # Not quite sure how to handle this yet.  May turn out to be
-        # just whine then call .handle_ACKPDU(), or refactor
-        # .handle_ACKPDU() to share common code, or ....
-        raise NotImplementedError
+                    logger.exception("%r unhandled exception running %r on %r", self, pdu.vendor_hook, pdu)
 
     def handle_encapsulation(self, pdu):
         if not self.is_open:
@@ -1044,12 +1059,12 @@ class Session:
         self.send_pdu(ACKPDU(ack_type = pdu.pdu_type))
 
     def send_pdu(self, pdu):
-        if isinstance(pdu, (EncapsulationPDU, VendorPDU)) and pdu.pdu_type in self.rxq:
+        if pdu.pdu_type != OpenPDU.pdu_type and isinstance(pdu, PDU.acked_pdu_classes) and pdu.pdu_type in self.rxq:
             logger.debug("%r deferring %r", self, pdu)
             self.deferred[pdu.pdu_type] = pdu
             return
         assert pdu.pdu_type not in self.rxq
-        if isinstance(pdu, (OpenPDU, EncapsulationPDU, VendorPDU)):
+        if isinstance(pdu, PDU.acked_pdu_classes):
             logger.debug("%r adding %r to rxq", self, pdu)
             self.rxq[pdu.pdu_type] = pdu
         logger.debug("%r sending %r", self, pdu)
