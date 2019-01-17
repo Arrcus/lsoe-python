@@ -891,10 +891,6 @@ class Session:
     def is_open(self):
         return self.our_open_acked and self.peer_open_nonce is not None
 
-    @is_open.setter
-    def is_open(self, value):
-        assert not value
-
     def recv(self, msg):
         try:
             pdu = PDU.parse(msg)
