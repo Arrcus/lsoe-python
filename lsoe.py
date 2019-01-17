@@ -554,7 +554,7 @@ class OpenPDU(PDU):
         self._kwset(b, kwargs)
         if b is not None:
             self.nonce, self.local_id, attribute_length = self.h1.unpack_from(b, self.h0.size)
-            self.attributes = b[self.h1.size : self.h1.size + attribute_length]
+            self.attributes = b[self.h0.size + self.h1.size : self.h0.size + self.h1.size + attribute_length]
             self.auth_length, = self.h2.unpack_from(b, self.h0.size + self.h1.size + attribute_length)
             if self.auth_length != 0:
                 # Implementation restriction until LSOE signature spec written
@@ -606,21 +606,49 @@ class ACKPDU(PDU):
 
     h1 = struct.Struct("!B")
 
+    vendor_hook = None
+
     def __init__(self, b = None, **kwargs):
         self._kwset(b, kwargs)
         if b is not None:
-            self.acked_type, = self.h1.unpack_from(b, self.h0.size)
-            if self.acked_type not in self.pdu_type_map:
-                raise PDUParseError("ACK of unknown PDU type {}".format(self.acked_type))                
-            if not issubclass(self.pdu_type_map[self.acked_type], (OpenPDU, EncapsulationPDU)):
-                raise PDUParseError("ACK of un-ACKed PDU type {}".format(self.pdu_type_map[self.acked_type]))
+            self.ack_type, = self.h1.unpack_from(b, self.h0.size)
+            if self.ack_type not in self.pdu_type_map:
+                raise PDUParseError("ACK of unknown PDU type {}".format(self.ack_type))                
+            if not issubclass(self.pdu_type_map[self.ack_type], (OpenPDU, EncapsulationPDU, VendorPDU)):
+                raise PDUParseError("ACK of un-ACKed PDU type {}".format(self.pdu_type_map[self.ack_type]))
 
     def __bytes__(self):
-        assert issubclass(self.pdu_type_map[self.acked_type], (OpenPDU, EncapsulationPDU))
-        return self._b(self.h1.pack(self.acked_type))
+        assert issubclass(self.pdu_type_map[self.ack_type], (OpenPDU, EncapsulationPDU, VendorPDU))
+        return self._b(self.h1.pack(self.ack_type))
 
     def __repr__(self):
-        return "<ACKPDU: {} ({})>".format(self.pdu_type_map[self.acked_type].__name__, self.acked_type)
+        return "<ACKPDU: {} ({})>".format(self.pdu_type_map[self.ack_type].__name__, self.ack_type)
+
+@register_pdu
+class ErrorPDU(PDU):
+
+    pdu_type = 4
+
+    h1 = struct.Struct("!BHH")
+
+    vendor_hook = None
+
+    def __init__(self, b = None, **kwargs):
+        self._kwset(b, kwargs)
+        if b is not None:
+            self.nak_type, self.error_code, self.error_hint = self.h1.unpack_from(b, self.h0.size)
+            if self.nak_type not in self.pdu_type_map:
+                raise PDUParseError("NAK of unknown PDU type {}".format(self.nak_type))                
+            if not issubclass(self.pdu_type_map[self.nak_type], (OpenPDU, EncapsulationPDU, VendorPDU)):
+                raise PDUParseError("NAK of un-ACKed PDU type {}".format(self.pdu_type_map[self.nak_type]))
+
+    def __bytes__(self):
+        assert issubclass(self.pdu_type_map[self.nak_type], (OpenPDU, EncapsulationPDU, VendorPDU))
+        return self._b(self.h1.pack(self.nak_type, self.error_code, self.error_hint))
+
+    def __repr__(self):
+        return "<ErrorPDU: {} ({}) {} {}>".format(
+            self.pdu_type_map[self.nak_type].__name__, self.nak_type, self.error_code, self.error_hint)
 
 class EncapsulationPDU(PDU):
 
@@ -646,23 +674,45 @@ class EncapsulationPDU(PDU):
 
 @register_pdu
 class IPv4EncapsulationPDU(EncapsulationPDU):
-    pdu_type = 4
+    pdu_type = 5
     encap_type = IPv4Encapsulation
 
 @register_pdu
 class IPv6EncapsulationPDU(EncapsulationPDU):
-    pdu_type = 5
+    pdu_type = 6
     encap_type = IPv6Encapsulation
 
 @register_pdu
 class MPLSIPv4EncapsulationPDU(EncapsulationPDU):
-    pdu_type = 6
+    pdu_type = 7
     encap_type = MPLSIPv4Encapsulation
 
 @register_pdu
 class MPLSIPv6EncapsulationPDU(EncapsulationPDU):
-    pdu_type = 7
+    pdu_type = 8
     encap_type = MPLSIPv6Encapsulation
+
+@register_pdu
+class VendorPDU(PDU):
+
+    pdu_type = 255
+
+    h1 = struct.Struct("!L")
+
+    vendor_dispatch = {}
+
+    def __init__(self, b = None, **kwargs):
+        self.enterprise_data = b""
+        self._kwset(b, kwargs)
+        if b is not None:
+            self.enterprise_number, = self.h1.unpack_from(b, self.h0.size)
+            self.enterprise_data = b[self.h0.size + self.h1.size :]
+
+    def __bytes__(self):
+        return self._b(self.h1.pack(self.enterprise_number) + self.enterprise_data)
+
+    def __repr__(self):
+        return "<VendorPDU: {}>".format(self.enterprise_number)
 
 
 
@@ -923,18 +973,29 @@ class Session:
             self.send_open_maybe()
 
     def handle_ACKPDU(self, pdu):
-        if pdu.acked_type not in self.rxq:
+        if pdu.ack_type not in self.rxq:
             logger.info("%r received ACK with no relevant outgoing PDU: %r", self, pdu)
             return
-        logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.acked_type])
-        del self.rxq[pdu.acked_type]
-        next_pdu = self.deferred.pop(pdu.acked_type, None)
-        if pdu.acked_type == OpenPDU.pdu_type:
+        logger.debug("%r received ACK %r for PDU %r", self, pdu, self.rxq[pdu.ack_type])
+        del self.rxq[pdu.ack_type]
+        next_pdu = self.deferred.pop(pdu.ack_type, None)
+        if pdu.ack_type == OpenPDU.pdu_type:
             assert next_pdu is None
             self.our_open_acked = True
             self.saw_keepalive()
         elif next_pdu is not None:
             self.send_pdu(next_pdu)
+            if pdu.ack_type == VendorPDU.pdu_type and ACKPDU.vendor_hook is not None:
+                try:
+                    ACKPDU.vendor_hook(self, pdu)
+                except:
+                    logger.exception("%r unhandled exception running %r on %r", self, ACKPDU.vendor_hook, pdu)
+
+    def handle_ErrorPDU(self, pdu):
+        # Not quite sure how to handle this yet.  May turn out to be
+        # just whine then call .handle_ACKPDU(), or refactor
+        # .handle_ACKPDU() to share common code, or ....
+        raise NotImplementedError
 
     def handle_encapsulation(self, pdu):
         if not self.is_open:
@@ -955,6 +1016,18 @@ class Session:
     def handle_MPLSIPv6EncapsulationPDU(self, pdu):
         self.handle_encapsulation(pdu)
 
+    def handle_VendorPDU(self, pdu):
+        if not self.is_open:
+            logger.info("%r received VendorPDU but connection not open: %r", self, pdu)
+            return
+        self.send_ack(pdu)
+        if self.enterprise_number in self.vendor_dispatch:
+            try:
+                self.vendor_dispatch[self.enterprise_number](self, pdu)
+            except:
+                logger.exception("%r unhandled exception from %r processing %r",
+                                 self, self.vendor_dispatch[self.enterprise_number], pdu)
+
     def saw_keepalive(self):
         if self.is_open:
             self.saw_last_keepalive = tornado.ioloop.IOLoop.current().time()
@@ -968,15 +1041,15 @@ class Session:
             self.send_pdu(OpenPDU(local_id = self.main.local_id, attributes = attributes))
 
     def send_ack(self, pdu):
-        self.send_pdu(ACKPDU(acked_type = pdu.pdu_type))
+        self.send_pdu(ACKPDU(ack_type = pdu.pdu_type))
 
     def send_pdu(self, pdu):
-        if isinstance(pdu, EncapsulationPDU) and pdu.pdu_type in self.rxq:
+        if isinstance(pdu, (EncapsulationPDU, VendorPDU)) and pdu.pdu_type in self.rxq:
             logger.debug("%r deferring %r", self, pdu)
             self.deferred[pdu.pdu_type] = pdu
             return
         assert pdu.pdu_type not in self.rxq
-        if isinstance(pdu, (OpenPDU, EncapsulationPDU)):
+        if isinstance(pdu, (OpenPDU, EncapsulationPDU, VendorPDU)):
             logger.debug("%r adding %r to rxq", self, pdu)
             self.rxq[pdu.pdu_type] = pdu
         logger.debug("%r sending %r", self, pdu)
