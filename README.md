@@ -105,8 +105,11 @@ We'll fix this.  For now, don't use this outside a lab.
 Some helpful advice from a colleague, kept here until we sort this out:
 
 > Date: Wed, 7 Nov 2018 21:25:58 -0800
+>
 > From: Paul Congdon
+>
 > Subject: Addressing and prototype protocol development for LSOE
+>
 > 
 > This may or may not be useful, but IEEE 802 Overview and
 > Architecture specifies an Ethertype and header encapsulation
