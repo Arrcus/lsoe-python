@@ -670,23 +670,6 @@ class MPLSIPv6EncapsulationPDU(EncapsulationPDU):
 # Network interface status and monitoring.
 #
 
-# Do we send the same encapsulation PDU to each neighbor?  If
-# we're storing .send_pdu() timeouts and counters in the PDU
-# object we're going to need separate copies for each session.
-#
-# So we need a current set of encap PDUs (all encapsulations we
-# support) when we start a new session, and we need copies of a
-# changed encapsulation PDU for each live session when something
-# changes.  Probably best to leave copying in latter case for
-# Main/Session layer since we have no idea how many sesions here,
-# but only we know when something changed so we have to initiate.
-# Only Main/Session knows when we have new or restart session, so
-# it has to initiate.  So I guess ._handle_event() has to push,
-# and Main/Session has to pull.
-
-# pyroute2 interface is all text representations of addresess, need to
-# convert to binary, just a question of where's the best place.
-
 class Interface:
 
     def __init__(self, index, name, macaddr, flags):
