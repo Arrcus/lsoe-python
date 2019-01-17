@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
-"""Initial implementation of draft-ietf-lsvr-lsoe-01 (LSOE).
+"""
+Initial implementation of Link State Over Ethernet (LSOE).
+https://datatracker.ietf.org/doc/draft-ietf-lsvr-lsoe/
 
-Be warned that the specification is in flux, we don't expect -02 to be
-the final protocol.
+This is a work in progress, neither the specification nor the code are
+really stable yet.
 """
 
 # Default configuration, here for ease of reference.
@@ -12,7 +14,7 @@ default_config = '''
 
 # Default configuration values, expressed in the same syntax
 # as the optional configuration file. Section name "[lsoe]" is mandatory.
-# All times expressed in seconds, so 0.1 is 100 milliseconds, etc.
+# All times are expressed in seconds, so 0.1 is 100 milliseconds, et cetera.
 
 [lsoe]
 
@@ -1136,7 +1138,10 @@ class Main:
         os.environ.update(TZ = "UTC")
         time.tzset()
 
-        ap = argparse.ArgumentParser()
+        ap = argparse.ArgumentParser(description = __doc__,
+                                     formatter_class = type("HF", (argparse.ArgumentDefaultsHelpFormatter,
+                                                                   argparse.RawDescriptionHelpFormatter), {}),
+                                     epilog = default_config)
         ap.add_argument("-c", "--config",
                         help = "configuration file",
                         type = argparse.FileType("r"),
