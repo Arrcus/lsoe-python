@@ -151,6 +151,14 @@ class IPAddress(bytes):
         "Address Family"
         return socket.AF_INET if len(self) == 4 else socket.AF_INET6
 
+# We represent time as Python's time.time() function does: a Python
+# float representing time in seconds, so .1 is 100 milliseconds, et
+# cetera.  Per the Tornado documentation, we use Tornado's .time()
+# function rather than using Python's directly.
+
+def current_time():
+    return tornado.ioloop.IOLoop.current().time()
+
 
 
 #
@@ -163,7 +171,7 @@ class Datagram:
     """
 
     h = struct.Struct("!BBHL")
-    LAST_FLAG  = 0x80
+    LAST_FLAG = 0x80
 
     # "F table" S-Box from Skipjack, used in the LSOE checksum
     _sbox = (0xa3,0xd7,0x09,0x83,0xf8,0x48,0xf6,0xf4,0xb3,0x21,0x15,0x78,0x99,0xb1,0xaf,0xf9,
@@ -205,7 +213,7 @@ class Datagram:
             frag      = frag,
             length    = length,
             checksum  = checksum,
-            timestamp = tornado.ioloop.IOLoop.current().time())
+            timestamp = current_time())
 
     def verify(self):
         "Verify content of an incoming datagram."
@@ -342,7 +350,7 @@ class EtherIO:
             logger.warn("MAC address %s moved from interface %s to interface %s, dropping",
                         macaddr, self.macdb[macaddr].ifname, sa_ll.ifname)
             return
-        self.macdb[macaddr].timestamp = self.ioloop.time()
+        self.macdb[macaddr].timestamp = current_time()
         d = Datagram.incoming(pkt, sa_ll)
         if not d.verify():
             return
@@ -365,7 +373,7 @@ class EtherIO:
     def _gc(self):
         "Internal garbage collector for incomplete messages and stale MAC addresses."
         logger.debug("EtherIO GC")
-        now = self.ioloop.time()
+        now = current_time()
         threshold = now - self.cfg.getfloat("reassembly-timeout")
         for macaddr, rq in self.dgrams.items():
             rq.sort(key = lambda d: d.timestamp)
@@ -978,7 +986,7 @@ class Timer:
 
 
     def __init__(self, event):
-        self.now   = tornado.ioloop.IOLoop.current().time()
+        self.now   = current_time()
         self.wake  = None
         self.event = event
         logger.debug("%r initialized", self)
@@ -1197,7 +1205,7 @@ class Session:
     def saw_keepalive(self):
         "Record keepalive timestamp, if and only if session is open."
         if self.is_open:
-            self.saw_last_keepalive = tornado.ioloop.IOLoop.current().time()
+            self.saw_last_keepalive = current_time()
 
     def send_open_maybe(self, attributes = b""):
         "Send an OPEN PDU if appropriate in our session current state."
@@ -1231,7 +1239,7 @@ class Session:
         if pdu.pdu_type in self.rxq:
             pdu.rxmit_interval  = self.main.cfg.getfloat("retransmit-initial-interval")
             pdu.rxmit_dropsleft = self.main.cfg.getint("retransmit-max-drop")
-            pdu.rxmit_timeout   = tornado.ioloop.IOLoop.current().time() + pdu.rxmit_interval
+            pdu.rxmit_timeout   = current_time() + pdu.rxmit_interval
             logger.debug("%r setting initial rxmit_timeout %s rxmit_interval %s rxmit_dropsleft %s for %r",
                          self, pdu.rxmit_timeout, pdu.rxmit_interval, pdu.rxmit_dropsleft, pdu)
             self.main.wake.set()
