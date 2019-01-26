@@ -517,7 +517,7 @@ class MPLSIPv6Encapsulation(MPLSIPEncapsulation):
 # Presentation layer: PDUs
 #
 
-def register_pdu(cls):
+def register_unacked_pdu(cls):
     """
     Decorator to register a PDU class in the PDU dispatch table.
     """
@@ -533,7 +533,7 @@ def register_acked_pdu(cls):
     and mark it as a class for which we expect to see ACKs.
     """
 
-    cls = register_pdu(cls)
+    cls = register_unacked_pdu(cls)
     PDU.acked_pdu_classes = PDU.acked_pdu_classes + (cls,)
     return cls
 
@@ -546,7 +546,7 @@ class PDU:
     """
 
     pdu_type = None             # Each subclass must override this
-    pdu_type_map = {}           # Class data: map pdu_number -> PDU subclass, built up by @register_pdu decorator
+    pdu_type_map = {}           # Class data: map pdu_number -> PDU subclass, built up by @register_*_pdu decorators
     acked_pdu_classes = ()      # Class data: tuple of ACKed types, built up by @register_acked_pdu decorator
 
     h0 = struct.Struct("!BH")
@@ -576,7 +576,7 @@ class PDU:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-@register_pdu
+@register_unacked_pdu
 class HelloPDU(PDU):
     "HELLO PDU."
 
@@ -638,7 +638,7 @@ class OpenPDU(PDU):
     def nonce(self, value):
         self._nonce = value
 
-@register_pdu
+@register_unacked_pdu
 class KeepAlivePDU(PDU):
     "KEEPALIVE PDU."
 
@@ -655,7 +655,7 @@ class KeepAlivePDU(PDU):
     def __repr__(self):
         return "<KeepAlivePDU>"
 
-@register_pdu
+@register_unacked_pdu
 class ACKPDU(PDU):
     "ACK PDU."
 
@@ -681,7 +681,7 @@ class ACKPDU(PDU):
     def __repr__(self):
         return "<ACKPDU: {} ({})>".format(self.pdu_type_map[self.ack_type].__name__, self.ack_type)
 
-@register_pdu
+@register_unacked_pdu
 class ErrorPDU(PDU):
     "ERROR PDU."
 
