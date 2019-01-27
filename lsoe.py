@@ -734,7 +734,7 @@ class ACKPDU(PDU):
 
     @property
     def error_code(self):
-        return LSOEErrorCode.maybe((self._error_code_code & self._code_mask) >> self._code_shift)
+        return LSOEErrorCode.maybe((self._error_type_code & self._code_mask) >> self._code_shift)
 
     @error_code.setter
     def error_code(self, value):
