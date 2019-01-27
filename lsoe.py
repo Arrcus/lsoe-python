@@ -721,7 +721,7 @@ class ACKPDU(PDU):
             name = self.pdu_type_map[self.ack_type].__name__)
 
     @property
-    def def error_type(self):
+    def error_type(self):
         return LSOEErrorType.maybe((self._error_type_code & self._type_mask) >> self._type_shift)
 
     @error_type.setter
@@ -733,7 +733,7 @@ class ACKPDU(PDU):
         self._error_type_code |= value
 
     @property
-    def def error_code(self):
+    def error_code(self):
         return LSOEErrorCode.maybe((self._error_code_code & self._code_mask) >> self._code_shift)
 
     @error_code.setter
