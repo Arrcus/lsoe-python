@@ -422,27 +422,22 @@ class Encapsulation:
 
     # Property methods to make the flags act like Python booleans
 
-    @property
-    def primary(self):
-        return self.flags & self._primary_flag != 0
+    def _flag_getter(self, flag):
+        return self.flags & flag != 0        
 
-    @primary.setter
-    def primary(self, newval):
-        if newval:
-            self.flags |= self._primary_flag
+    def _flag_setter(self, flag, value):
+        if value:
+            self.flags |= flag
         else:
-            self.flags &= ~self._primary_flag
+            self.flags &= ~flag
 
-    @property
-    def loopback(self):
-        return self.flags & self._loopback_flag != 0
+    primary = property(
+        lambda self:    self._flag_getter(self._primary_flag),
+        lambda self, v: self._flag_setter(self._primary_flag, v))
 
-    @loopback.setter
-    def loopback(self, newval):
-        if newval:
-            self.flags |= self._loopback_flag
-        else:
-            self.flags &= ~self._loopback_flag
+    loopback = property(
+        lambda self:    self._flag_getter(self._loopback_flag),
+        lambda self, v: self._flag_setter(self._loopback_flag, v))
 
     def _kwset(self, b, offset, kwargs):
         "Keyword-based initialization."
@@ -720,29 +715,23 @@ class ACKPDU(PDU):
             self = self,
             name = self.pdu_type_map[self.ack_type].__name__)
 
-    @property
-    def error_type(self):
-        return LSOEErrorType.maybe((self._error_type_code & self._type_mask) >> self._type_shift)
+    def _error_getter(self, cls, mask, shift):
+        return cls.maybe((self._error_type_code & mask) >> shift)
 
-    @error_type.setter
-    def error_type(self, value):
-        assert isinstance(value, LSOEErrorType)
-        value = value.value << self._type_shift
-        assert value & ~self._type_mask == 0
-        self._error_type_code &= ~self._type_mask
+    def _error_setter(self, cls, mask, shift, value):
+        assert isinstance(value, cls)
+        value = value.value << shift
+        assert value & ~mask == 0
+        self._error_type_code &= ~mask
         self._error_type_code |= value
 
-    @property
-    def error_code(self):
-        return LSOEErrorCode.maybe((self._error_type_code & self._code_mask) >> self._code_shift)
+    error_type = property(
+        lambda self:    self._error_getter(LSOEErrorType, self._type_mask, self._type_shift),
+        lambda self, v: self._error_setter(LSOEErrorType, self._type_mask, self._type_shift, v))
 
-    @error_code.setter
-    def error_code(self, value):
-        assert isinstance(value, LSOEErrorCode)
-        value = value.value << self._code_shift
-        assert value  & ~self._code_mask == 0
-        self._error_type_code &= ~self._code_mask
-        self._error_type_code |= value
+    error_code = property(
+        lambda self:    self._error_getter(LSOEErrorCode, self._code_mask, self._code_shift),
+        lambda self, v: self._error_setter(LSOEErrorCode, self._code_mask, self._code_shift, v))
 
 class EncapsulationPDU(PDU):
     """"
