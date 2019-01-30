@@ -9,9 +9,9 @@ Implementation environment and dependencies
 Currently we're avoiding any features not available as packaged
 software on Debian Jessie, which means:
 
-* No requiring Python features more recent than Python 3.4;
-* Tornado's I/O and coroutine environment rather than Python `asyncio`;
-* `yield`-based coroutines rather than `async def`, `await`, et cetera.
+* Avoiding Python features requiring a version more recent than Python 3.4;
+* Using Tornado's I/O and coroutine environment rather than Python `asyncio`;
+* Using `yield`-based coroutines rather than `async def`, `await`, et cetera.
 
 We're currently using two external packages:
 
@@ -48,12 +48,12 @@ Vendor extensions
 -----------------
 
 The implementation has minimal support for externally supplied
-vendor-specific PDUs.  Specifically, there are hooks in the VENDOR,
-ACK, and ERROR PDU handlers for vendor-supplied code.  This has not
-been tested, and we don't recommend using this mechanism unless you're
-comfortable reading the code to see what it does.  The intent is just
-to make it possible for you to add vendor extensions without having to
-modify the core protocol engine.
+vendor-specific PDUs.  Specifically, there are hooks in the VENDOR and
+ACK PDU handlers for vendor-supplied code.  This has not been tested,
+and we don't recommend using this mechanism unless you're comfortable
+reading the code to see what it does.  The intent is just to make it
+possible for you to add vendor extensions without having to modify the
+core protocol engine.
 
 Example:
 
@@ -71,12 +71,8 @@ def my_vendor_pdu_handler(session, pdu):
 def my_ack_pdu_handler(session, pdu):
     # Do something interesting here
 
-def my_error_pdu_handler(session, pdu):
-    # Do something interesting here
-
 lsoe.VendorPDU.vendor_dispatch[my_enterprise_number] = my_vendor_pdu_handler
 lsoe.ACKPDU.vendor_hook = my_ack_pdu_handler
-lsoe.ErrorDU.vendor_hook = my_error_pdu_handler
 
 if __name__ == "__main__":
     try:
@@ -90,7 +86,11 @@ if __name__ == "__main__":
         sys.exit(1)
 ```
 
-You don't need to use all the hooks, only set the one(s) you need.
+You don't need to use both hooks, only set the one(s) you need.
+
+The ACK hook doesn't use the vendor's enterprise number because it
+intercepts *all* ACKs, not just ACKs for VENDOR PDUs.  This is subject
+to change if and when we figure out a better way to do this.
 
 Multicast addresses
 -------------------
