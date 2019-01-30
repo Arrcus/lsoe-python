@@ -63,6 +63,9 @@ reassembly-timeout = 1.0
 
 # How long to wait before purging a stale MAC address from the cache
 mac-address-cache-timeout = 300.0
+
+# Multicast MAC address to use when sending Hello PDUs
+hello-multicast-macaddr = 01-80-C2-00-00-0E
 '''
 
 # Implementation notes:
@@ -135,11 +138,6 @@ ETH_FRAME_LEN   = 1514          # Max. octets in frame sans FCS
 ETH_P_IEEE_EXP1 = 0x8885        # "Local Experimental EtherType 1"
 ETH_P_IEEE_EXP2 = 0x8886        # "Local Experimental EtherType 2"
 ETH_P_LSOE      = ETH_P_IEEE_EXP1
-
-# MAC address to which we should send LSOE Hello PDUs.
-# Some archived email discussing this, I think.
-
-LSOE_HELLO_MACADDR = b"\xFF\xFF\xFF\xFF\xFF\xFF" # Figure out real value...
 
 # Linux PF_PACKET API constants from linux/if_packet.h.
 
@@ -1452,7 +1450,7 @@ class Main:
                     continue
                 pdu = HelloPDU(my_macaddr = iface.macaddr)
                 logger.debug("Multicasting %r to %s", pdu, iface.name)
-                self.io.write(pdu, LSOE_HELLO_MACADDR, iface.name)
+                self.io.write(pdu, MACAddress(self.cfg.get("hello-multicast-macaddr")), iface.name)
             logger.debug("Sleeping hello_beacon task")
             yield tornado.gen.sleep(self.cfg.getfloat("hello-interval"))
 
