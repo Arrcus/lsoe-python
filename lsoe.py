@@ -445,7 +445,7 @@ class Encapsulation:
     # Property methods to make the flags act like Python booleans
 
     def _flag_getter(self, flag):
-        return self.flags & flag != 0        
+        return self.flags & flag != 0
 
     def _flag_setter(self, flag, value):
         if value:
@@ -494,7 +494,7 @@ class IPEncapsulation(Encapsulation):
 class MPLSIPEncapsulation(Encapsulation):
     """
     Base for MPLS encapsulation classes.
-    
+
     For now we pretend that we can treat an MPLS label as an opaque
     three-octet string rather than needing yet another class with
     get/set properties.
@@ -714,7 +714,7 @@ class ACKPDU(PDU):
         if b is not None:
             self.ack_type, self._error_type_code, self.error_hint = self.h1.unpack_from(b, self.h0.size)
             if self.ack_type not in self.pdu_type_map:
-                raise PDUParseError("ACK of unknown PDU type {}".format(self.ack_type))                
+                raise PDUParseError("ACK of unknown PDU type {}".format(self.ack_type))
             if not issubclass(self.pdu_type_map[self.ack_type], PDU.acked_pdu_classes):
                 raise PDUParseError("ACK of un-ACKed PDU type {}".format(self.pdu_type_map[self.ack_type]))
             if not isinstance(self.error_type, LSOEErrorType):
