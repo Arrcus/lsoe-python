@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
-# Minimal demo hacked from
-# https://stackoverflow.com/questions/16844182/getting-started-with-cherrypy-and-jinja2
-
-# In theory, this allows POSTS as JSON data to /mutate, and renders /
-# using Jinja2 templates.  Untested.
+# Toy server using cherrypy and jinja2.
+#
+# / is the display pane, uses jinja2 to format whatever's in the toy database.
+#
+# /mutate is the upload point, parses JSON and stuffs result into the toy database.
 
 import cherrypy
 
