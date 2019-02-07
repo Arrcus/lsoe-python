@@ -8,13 +8,13 @@ Toy server using cherrypy and jinja2.
 /mutate is the upload point, parses JSON and stuffs result into the toy database.
 """
 
-import cherrypy, argparse, jinja2
+import cherrypy, argparse, jinja2, time
 
 class Root(object):
 
     def __init__(self, template_dir):
         self.env = jinja2.Environment(loader = jinja2.FileSystemLoader(template_dir))
-        self.data = {}
+        self.data = dict(history = {}, latest = {})
 
     @cherrypy.expose
     def index(self):
@@ -23,7 +23,13 @@ class Root(object):
     @cherrypy.expose
     @cherrypy.tools.json_in()
     def mutate(self):
-        self.data = cherrypy.request.json
+        data = dict(cherrypy.request.json,
+                    timestamp = time.time(),
+                    client_ip = cherrypy.request.remote.ip)
+        if cherrypy.request.remote.ip not in self.data["history"]:
+            self.data["history"][cherrypy.request.remote.ip] = []
+        self.data["history"][cherrypy.request.remote.ip].append(data)
+        self.data["latest"][(data["client_ip"],) + tuple(data["unique"])] = data
 
 HF = type("HF", (argparse.RawDescriptionHelpFormatter,
                  argparse.ArgumentDefaultsHelpFormatter), {})

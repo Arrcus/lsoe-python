@@ -1,8 +1,18 @@
 <html>
   <head>
-    <title>{{title}}</title>
+    <title>LSOE Debug</title>
+    <meta content="30" http-equiv="Refresh"/>
   </head>
   <body>
-    {{body}}
+    <h1>Latest</h1>
+    {% for key, value in latest|dictsort %}
+      <h2>{{ key }}</h2>
+      <pre>{{ value | pprint }}</pre>
+    {% endfor %}
+    <h1>History</h1>
+    {% for addr, update in history.iteritems() %}
+      <h2>{{ addr }}</h2>
+      <pre>{{ update | pprint }}</pre>
+    {% endfor %}
   </body>
 </html>
