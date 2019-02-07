@@ -14,7 +14,7 @@ class Root(object):
 
     def __init__(self, template_dir):
         self.env = jinja2.Environment(loader = jinja2.FileSystemLoader(template_dir))
-        self.data = dict(history = {}, latest = {})
+        self.data = dict(latest = {})
 
     @cherrypy.expose
     def index(self):
@@ -23,13 +23,11 @@ class Root(object):
     @cherrypy.expose
     @cherrypy.tools.json_in()
     def mutate(self):
-        data = dict(cherrypy.request.json,
-                    timestamp = time.time(),
-                    client_ip = cherrypy.request.remote.ip)
-        if cherrypy.request.remote.ip not in self.data["history"]:
-            self.data["history"][cherrypy.request.remote.ip] = []
-        self.data["history"][cherrypy.request.remote.ip].append(data)
-        self.data["latest"][(data["client_ip"],) + tuple(data["unique"])] = data
+        val = dict(cherrypy.request.json,
+                   timestamp = time.time(),
+                   client_ip = cherrypy.request.remote.ip)
+        key = (cherrypy.request.remote.ip,) + tuple(val["unique"])
+        self.data["latest"][key] = val
 
 HF = type("HF", (argparse.RawDescriptionHelpFormatter,
                  argparse.ArgumentDefaultsHelpFormatter), {})

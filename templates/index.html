@@ -4,15 +4,48 @@
     <meta content="30" http-equiv="Refresh"/>
   </head>
   <body>
-    <h1>Latest</h1>
-    {% for key, value in latest|dictsort %}
-      <h2>{{ key }}</h2>
-      <pre>{{ value | pprint }}</pre>
+    <h1>LSOE Status</h1>
+
+    {# Enable this to dump raw content of each database entry #}
+    {% set debug = false %}
+
+    {% for client, list in latest.values()|groupby("client_ip") %}
+      {% for my_switch_id, list in list|groupby("my_switch_id") %}
+        <h2>Switch {{ client }} ID {{ my_switch_id }}</h2>
+        {% for interface, list in list|groupby("ifname") %}
+          <h3>Interface {{ interface }}</h3>
+          {% for peer_macaddr, list in list|groupby("peer_macaddr") %}
+            {% for peer_switch_id, list in list|groupby("peer_switch_id") %}
+              <h4>Peer MAC address {{ peer_macaddr }} ID {{ peer_switch_id }}</h4>
+              {% for pdu_name, list in list|groupby("pdu_name") %}
+                <h5>{{ pdu_name }}</h5>
+                {% for report in list %}
+                  <ul>
+                    {% for encap in report.encaps %}
+                      <li>
+                        {{ encap.ipaddr }}/{{ encap.prefixlen }}
+                        {% if encap.primary %} [Primary] {% endif %}
+                        {% if encap.loopback %} [Loopback] {% endif %}
+                        {% if encap.labels %}
+                          {% for label in encap.labels %}
+                            {{ label }}
+                          {% endfor %}
+                        {% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+
+                  {% if debug %}
+                    <pre>{{ report | pprint }}</pre>
+                  {% endif %}
+
+                {% endfor %}
+              {% endfor %}
+            {% endfor %}
+          {% endfor %}
+        {% endfor %}
+      {% endfor %}
     {% endfor %}
-    <h1>History</h1>
-    {% for addr, update in history.iteritems() %}
-      <h2>{{ addr }}</h2>
-      <pre>{{ update | pprint }}</pre>
-    {% endfor %}
+
   </body>
 </html>
