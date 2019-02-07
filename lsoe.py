@@ -618,19 +618,16 @@ class HelloPDU(PDU):
 
     pdu_type = 0
 
-    h1 = struct.Struct("!6s")
-
     def __init__(self, b = None, **kwargs):
-        self._kwset(b, kwargs)
-        if b is not None:
-            my_macaddr, = self.h1.unpack_from(b, self.h0.size)
-            self.my_macaddr = MACAddress(my_macaddr)
+        assert not kwargs
+        if b is not None and len(b) != self.h0.size:
+            raise PDUParseError("HelloPDU content payload must be empty")
 
     def __bytes__(self):
-        return self._b(self.h1.pack(self.my_macaddr))
+        return self._b(b"")
 
     def __repr__(self):
-        return "<HelloPDU: {}>".format(self.my_macaddr)
+        return "<HelloPDU>"
 
 @register_acked_pdu
 class OpenPDU(PDU):
@@ -695,7 +692,7 @@ class KeepAlivePDU(PDU):
 class ACKPDU(PDU):
     "ACK PDU."
 
-    pdu_type = 4
+    pdu_type = 3
 
     h1 = struct.Struct("!BHH")
 
@@ -786,25 +783,25 @@ class EncapsulationPDU(PDU):
 @register_acked_pdu
 class IPv4EncapsulationPDU(EncapsulationPDU):
     "IPv4 encapsulation PDU."
-    pdu_type = 5
+    pdu_type = 4
     encap_type = IPv4Encapsulation
 
 @register_acked_pdu
 class IPv6EncapsulationPDU(EncapsulationPDU):
     "IPv6 encapsulation PDU."
-    pdu_type = 6
+    pdu_type = 5
     encap_type = IPv6Encapsulation
 
 @register_acked_pdu
 class MPLSIPv4EncapsulationPDU(EncapsulationPDU):
     "MPLS IPv4 encapsulation PDU."
-    pdu_type = 7
+    pdu_type = 6
     encap_type = MPLSIPv4Encapsulation
 
 @register_acked_pdu
 class MPLSIPv6EncapsulationPDU(EncapsulationPDU):
     "MPLS IPv6 encapsulation PDU."
-    pdu_type = 8
+    pdu_type = 7
     encap_type = MPLSIPv6Encapsulation
 
 @register_acked_pdu
@@ -822,22 +819,23 @@ class VendorPDU(PDU):
 
     pdu_type = 255
 
-    h1 = struct.Struct("!L")
+    h1 = struct.Struct("!LB")
 
     vendor_dispatch = {}
 
     def __init__(self, b = None, **kwargs):
         self.enterprise_data = b""
+        self.enterprise_type = 0
         self._kwset(b, kwargs)
         if b is not None:
-            self.enterprise_number, = self.h1.unpack_from(b, self.h0.size)
+            self.enterprise_number, self.enterprise_type = self.h1.unpack_from(b, self.h0.size)
             self.enterprise_data = b[self.h0.size + self.h1.size :]
 
     def __bytes__(self):
-        return self._b(self.h1.pack(self.enterprise_number) + self.enterprise_data)
+        return self._b(self.h1.pack(self.enterprise_number, self.enterprise_type) + self.enterprise_data)
 
     def __repr__(self):
-        return "<VendorPDU: {}>".format(self.enterprise_number)
+        return "<VendorPDU: {} {}>".format(self.enterprise_number, self.enterprise_type)
 
 
 
@@ -1479,7 +1477,7 @@ class Main:
                 if not iface.is_up:
                     logger.debug("Skipping Hello on down interface %s", iface.name)
                     continue
-                pdu = HelloPDU(my_macaddr = iface.macaddr)
+                pdu = HelloPDU()
                 logger.debug("Multicasting %r to %s", pdu, iface.name)
                 self.io.write(pdu, MACAddress(self.cfg.get("hello-multicast-macaddr")), iface.name)
             logger.debug("Sleeping hello_beacon task")
