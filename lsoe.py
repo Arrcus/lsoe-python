@@ -1164,6 +1164,8 @@ class Session:
             self.main.io.unread(pdu, self.macaddr, self.ifname)
             return self.close()
         self.peer_open_nonce = pdu.nonce
+        self.peer_id = pdu.local_id
+        self.peer_attributes = pdu.attributes
         self.send_ack(pdu)
         self.send_open_maybe()
         self.saw_keepalive()
@@ -1317,19 +1319,23 @@ class Session:
         report_rfc7752_url = self.main.cfg.get("report-rfc7752-url")
         if report_rfc7752_url:
             report = dict(
-                switch_id    = ":".join("{:02x}".format(b) for b in self.main.local_id),
-                session_id   = id(self),
-                ifname       = self.ifname,
-                peer_macaddr = str(self.macaddr),
-                pdu_type     = pdu.pdu_type,
-                pdu_name     = pdu.__class__.__name__[:-3].upper(),
-                encaps       = [dict(
-                    primary   = encap.primary,
-                    loopback  = encap.loopback,
-                    prefix    = str(encap.prefix),
-                    prefixlen = encap.prefixlen,
-                    labels    = (["".join("{:02x}".format(l) for l in label) for label in encap.labels]
-                                 if isinstance(pdu, MPLSIPEncapsulation) else None))])
+                my_switch_id    = ":".join("{:02x}".format(b) for b in self.main.local_id),
+                session_pyid    = id(self),
+                ifname          = self.ifname,
+                peer_macaddr    = str(self.macaddr),
+                peer_switch_id  = ":".join("{:02x}".format(b) for b in self.peer_id),
+                peer_attributes = [a for a in self.peer_attributes],
+                pdu_type        = pdu.pdu_type,
+                pdu_name        = pdu.__class__.__name__[:-3].upper(),
+                encaps          = [dict(primary   = encap.primary,
+                                        loopback  = encap.loopback,
+                                        ipaddr    = str(IPAddress(encap.ipaddr)),
+                                        prefixlen = encap.prefixlen,
+                                        labels    = (["".join("{:02x}".format(l) for l in label) for label in encap.labels]
+                                                     if isinstance(pdu, MPLSIPEncapsulation) else None))
+                                   for encap in pdu.encaps])
+            report["unique"] = [report[i] for i in ("my_switch_id", "ifname", "peer_macaddr", "peer_switch_id", "pdu_name")]
+
             request = tornado.httpclient.HTTPRequest(
                 url     = report_rfc7752_url,
                 method  = "POST",
