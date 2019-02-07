@@ -87,6 +87,7 @@ import os
 import sys
 import copy
 import enum
+import json
 import time
 import socket
 import struct
@@ -100,6 +101,7 @@ import tornado.gen
 import tornado.locks
 import tornado.ioloop
 import tornado.queues
+import tornado.httpclient
 
 import pyroute2
 import pyroute2.netlink.rtnl
@@ -1312,6 +1314,29 @@ class Session:
     def report_rfc7752(self, pdu):
         "Toss RFC 7752 data at log, since we have no real RFC 7752 code (yet)."
         logger.info("%r RFC-7752 data: %r", self, pdu)
+        report_rfc7752_url = self.main.cfg.get("report-rfc7752-url")
+        if report_rfc7752_url:
+            report = dict(
+                switch_id    = ":".join("{:02x}".format(b) for b in self.main.local_id),
+                session_id   = id(self),
+                ifname       = self.ifname,
+                peer_macaddr = str(self.macaddr),
+                pdu_type     = pdu.pdu_type,
+                pdu_name     = pdu.__class__.__name__[:-3].upper(),
+                encaps       = [dict(
+                    primary   = encap.primary,
+                    loopback  = encap.loopback,
+                    prefix    = str(encap.prefix),
+                    prefixlen = encap.prefixlen,
+                    labels    = (["".join("{:02x}".format(l) for l in label) for label in encap.labels]
+                                 if isinstance(pdu, MPLSIPEncapsulation) else None))])
+            request = tornado.httpclient.HTTPRequest(
+                url     = report_rfc7752_url,
+                method  = "POST",
+                headers = {"content-type" : "application/json"},
+                body    = json.dumps(report))
+            handler = lambda response: logger.debug("%r HTTP response for %r: %r", self, pdu, response)
+            tornado.httpclient.AsyncHTTPClient().fetch(request, handler)
 
     def cleanup_rfc7752(self):
         "Clear all RFC 7752 data, by synthesizing empty encapsulation PDUs."
