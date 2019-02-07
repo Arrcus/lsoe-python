@@ -6,13 +6,12 @@
 #
 # /mutate is the upload point, parses JSON and stuffs result into the toy database.
 
-import cherrypy
+import cherrypy, argparse, jinja2
 
 class Root(object):
 
-    def __init__(self, dir = "templates"):
-        from jinja2 import Environment, FileSystemLoader
-        self.env = Environment(loader = FileSystemLoader(dir))
+    def __init__(self, template_dir):
+        self.env = jinja2.Environment(loader = jinja2.FileSystemLoader(template_dir))
         self.data = {}
 
     @cherrypy.expose
@@ -24,7 +23,13 @@ class Root(object):
     def mutate(self):
         self.data = cherrypy.request.json
 
-cherrypy.config.update({"server.socket_host" : "127.0.0.1",
-                        "server.socket_port" : 8080 })
+ap = argparse.ArgumentParser()
+ap.add_argument("--host", default = "127.0.0.1")
+ap.add_argument("--port", default = 8080, type = int)
+ap.add_argument("--templates", default = "templates")
+args = ap.parse_args()
 
-cherrypy.quickstart(Root())
+cherrypy.config.update({"server.socket_host" : args.host,
+                        "server.socket_port" : args.port })
+
+cherrypy.quickstart(Root(args.templates))
