@@ -1,51 +1,69 @@
+{# Enable this to dump raw content of each database entry #}
+{% set debug = false %}
 <html>
   <head>
-    <title>LSOE Debug</title>
+    <title>LSOE Status</title>
     <meta content="30" http-equiv="Refresh"/>
+    <style>
+      table, th, td {
+        border: 1px solid black;
+      }
+      th, td {
+        padding: 2px;
+      }
+    </style>
   </head>
   <body>
     <h1>LSOE Status</h1>
-
-    {# Enable this to dump raw content of each database entry #}
-    {% set debug = false %}
-
     {% for client, list in latest.values()|groupby("client_ip") %}
       {% for my_switch_id, list in list|groupby("my_switch_id") %}
-        <h2>Switch {{ client }} ID {{ my_switch_id }}</h2>
-        {% for interface, list in list|groupby("ifname") %}
-          <h3>Interface {{ interface }}</h3>
-          {% for peer_macaddr, list in list|groupby("peer_macaddr") %}
-            {% for peer_switch_id, list in list|groupby("peer_switch_id") %}
-              <h4>Peer MAC address {{ peer_macaddr }} ID {{ peer_switch_id }}</h4>
-              {% for pdu_name, list in list|groupby("pdu_name") %}
-                <h5>{{ pdu_name }}</h5>
-                {% for report in list %}
-                  <ul>
+        <h2>Switch  ID {{ my_switch_id }}</h2>
+	<table>
+	  <tr>
+	    <th>Interface</th>
+	    <th>Peer MAC</th>
+	    <th>Peer ID</th>
+	    <th>Type</th>
+	    <th>Prefix</th>
+	    <th>Flags</th>
+	    <th>Labels</th>
+	  </tr>
+          {% for interface, list in list|groupby("ifname") %}
+            {% for peer_macaddr, list in list|groupby("peer_macaddr") %}
+              {% for peer_switch_id, list in list|groupby("peer_switch_id") %}
+		{% for pdu_name, list in list|groupby("pdu_name") %}
+                  {% for report in list %}
                     {% for encap in report.encaps %}
-                      <li>
-                        {{ encap.ipaddr }}/{{ encap.prefixlen }}
-                        {% if encap.primary %} [Primary] {% endif %}
-                        {% if encap.loopback %} [Loopback] {% endif %}
-                        {% if encap.labels %}
-                          {% for label in encap.labels %}
-                            {{ label }}
-                          {% endfor %}
-                        {% endif %}
-                      </li>
+		      <tr>
+			<td>{{ interface }}</td>
+			<td>{{ peer_macaddr }}</td>
+			<td>{{ peer_switch_id }}</td>
+			<td>{{ pdu_name[:-13] }}</td>
+			<td>{{ encap.ipaddr }}/{{ encap.prefixlen }}</td>
+			<td>
+			  {% if encap.primary %} [Primary] {% endif %}
+			  {% if encap.loopback %} [Loopback] {% endif %}
+			</td>
+			<td>
+                          {% if encap.labels %}
+			    {% for label in encap.labels %}
+			      {{ label }}
+			    {% endfor %}
+                          {% endif %}
+			</td>
+		      </tr>
                     {% endfor %}
-                  </ul>
-
-                  {% if debug %}
-                    <pre>{{ report | pprint }}</pre>
-                  {% endif %}
-
-                {% endfor %}
-              {% endfor %}
-            {% endfor %}
-          {% endfor %}
-        {% endfor %}
+		  {% endfor %}
+		{% endfor %}
+	      {% endfor %}
+	    {% endfor %}
+	  {% endfor %}
+	</table>
       {% endfor %}
     {% endfor %}
-
+    {% if debug %}
+      <h1>Debug</h1>
+      <pre>{{ latest.values() | pprint }}</pre>
+    {% endif %}
   </body>
 </html>
