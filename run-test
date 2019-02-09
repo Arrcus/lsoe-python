@@ -6,16 +6,21 @@ def docker(*cmd):
     print("+ docker " + " ".join(cmd))
     subprocess.check_call(("docker",) + cmd)
 
+eth0 = subprocess.check_output(("ip", "addr", "list", "eth0")).decode("ascii").splitlines()
+addr = [line for line in eth0 if "inet " in line][0].replace("/", " ").split()[1]
+port = 8080
+url  = "http://{}:{}/mutate".format(addr, port)
+
 links = yaml.load(open("topology.yaml"))
 nodes = set()
 for link in links:
     nodes.update(link)
 nodes = sorted(nodes)
 
-docker("run", "-dit", "--name", "kriek", "kriek")
+docker("run", "-dit", "-p={}:{}:{}".format(addr, port, port), "--name", "kriek", "kriek")
 
 for node in nodes:
-    docker("run", "-dit", "--name", node, "lsoed")
+    docker("run", "-dit", "--name", node, "--cap-add=NET_ADMIN", "lsoed")
 
 for spine, leaf in links:
     net = "{}-{}".format(spine, leaf)
@@ -24,4 +29,4 @@ for spine, leaf in links:
     docker("network", "connect", net, leaf)
 
 for node in nodes:
-    docker("exec", "-dit", node, "/app/configure", "--name", node) # , "--url", url
+    docker("exec", "-dit", node, "/app/configure", "--name", node, "--url", url)

@@ -11,4 +11,5 @@ RUN  pip install -r /app/requirements.txt
 COPY configure waiter src/lsoed /app/
 
 RUN  touch /app/blocked
-CMD ["/app/waiter"]
+#CMD ["/app/waiter"]
+CMD /app/waiter 1>/app/stdout 2>/app/stderr

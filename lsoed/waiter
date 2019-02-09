@@ -5,4 +5,4 @@ import os, time
 while os.path.exists("/app/blocked"):
     time.sleep(5)
 
-os.execv("/app/lsoed", "lsoed", "-c", "/app/lsoed.cfg")
+os.execl("/app/lsoed", "lsoed", "-dc", "/app/lsoed.cfg")
