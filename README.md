@@ -4,7 +4,7 @@ lsoe-demo
 Containerized LSoE demo and test environment.
 
 This spins up a bunch of containerized `lsoed` instances in a
-spine/leaf Clos topology, along with one instance of `kreik` (a
+spine/leaf Clos topology, along with one instance of `kriek` (a
 monitoring tool based on CherryPy and Jinja2), with the `lsoed`
 instances configured to report RFC 7752 data to `kriek`.
 
