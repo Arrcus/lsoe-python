@@ -20,7 +20,7 @@ Usage
 In theory, doing
 
 ```
-make test
+make demo
 ```
 
 will build the Docker images, start the herd of containers, plumb all

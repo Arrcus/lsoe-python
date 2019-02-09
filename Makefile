@@ -4,8 +4,8 @@ all:
 	${MAKE} -C lsoed
 	${MAKE} -C kriek
 
-test: all
-	sudo ./run-test
+demo: all
+	sudo ./run-demo
 
 clean:
 	-for i in ${NODES}; do docker stop $$i & done; wait

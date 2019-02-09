@@ -9,7 +9,7 @@ ap.add_argument("--broadcast", action = "store_true")
 args = ap.parse_args()
 
 with open("/app/lsoed.cfg", "w") as f:
-    f.write("[lsoe]\n")
+    f.write("[lsoed]\n")
 
     if args.name:
         f.write("local-id = {}\n".format((args.name.encode("ascii") + bytes(10))[:10].hex()))
