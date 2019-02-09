@@ -29,12 +29,18 @@ class Root(object):
     @cherrypy.expose
     @cherrypy.tools.json_in()
     def mutate(self):
-        now = time.time()
         val = dict(cherrypy.request.json,
-                   timestamp = time.strftime("%Y-%m-%d %H:%M:%S.{:06d}", time.gmtime(now)).format(int(now * 1000000) % 1000000),
+                   timestamp = self.zulu,
                    client_ip = cherrypy.request.remote.ip)
         key = (cherrypy.request.remote.ip,) + tuple(val["unique"])
         self.status[key] = val
+
+    @property
+    def zulu(self):
+        now = time.time()
+        return "{}.{:06d}".format(
+            time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(now)),
+            int(now * 1000000) % 1000000)
 
 HF = type("HF", (argparse.RawDescriptionHelpFormatter,
                  argparse.ArgumentDefaultsHelpFormatter), {})
