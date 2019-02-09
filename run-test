@@ -24,4 +24,4 @@ for spine, leaf in links:
     docker("network", "connect", net, leaf)
 
 for node in nodes:
-    docker("run", "exec", "-dit", node, "/app/configure", "--name", node) # , "--url", url
+    docker("exec", "-dit", node, "/app/configure", "--name", node) # , "--url", url
