@@ -35,10 +35,10 @@ really stable yet.
 default_config = '''
 
 # Default configuration values, expressed in the same syntax
-# as the optional configuration file. Section name "[lsoe]" is mandatory.
+# as the optional configuration file. Section name "[lsoed]" is mandatory.
 # All times are expressed in seconds, so 0.1 is 100 milliseconds, et cetera.
 
-[lsoe]
+[lsoed]
 
 # How long to wait before first retransmission
 retransmit-initial-interval = 1.0
@@ -1405,7 +1405,7 @@ class Main:
         cfg.read_string(default_config)
         if args.config is not None:
             cfg.read_file(args.config)
-        self.cfg = cfg["lsoe"]
+        self.cfg = cfg["lsoed"]
 
         self.debug = args.debug
 
