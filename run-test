@@ -3,6 +3,7 @@
 import yaml, subprocess
 
 def docker(*cmd):
+    print("+ docker " + " ".join(cmd))
     subprocess.check_call(("docker",) + cmd)
 
 links = yaml.load(open("topology.yaml"))
