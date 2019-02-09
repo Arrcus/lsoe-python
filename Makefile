@@ -5,7 +5,7 @@ all:
 	${MAKE} -C kriek
 
 test: all
-	./run-test
+	sudo ./run-test
 
 clean:
 	-for i in ${NODES}; do docker stop $$i; done
