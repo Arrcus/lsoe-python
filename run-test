@@ -46,8 +46,8 @@ for ns in namespaces:
 
 for spine, leaf in links:
     run("ip", "link", "add", spine+leaf, "type", "veth", "peer", "name", leaf+spine)
-    run("ip", "link", "set", spine+leaf, "netns", spine, "name", leaf)
-    run("ip", "link", "set", leaf+spine, "netns", leaf,  "name", spine)
+    run("ip", "link", "set", spine+leaf, "up", "netns", spine, "name", leaf)
+    run("ip", "link", "set", leaf+spine, "up", "netns", leaf,  "name", spine)
 
 for node in nodes:
     run("docker", "exec", "-dit", node, "/app/configure", "--name", node, "--url", url, "--broadcast")
