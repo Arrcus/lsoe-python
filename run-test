@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+
+import yaml, subprocess
+
+def docker(*cmd):
+    subprocess.check_call(("docker",) + cmd)
+
+links = yaml.load(open("topology.yaml"))
+nodes = set()
+for link in links:
+    nodes.update(link)
+nodes = sorted(nodes)
+
+docker("run", "-dit", "--name", "kriek", "kriek")
+
+for node in nodes:
+    docker("run", "-dit", "--name", node, "lsoed")
+
+for spine, leaf in links:
+    net = "{}-{}".format(spine, leaf)
+    docker("network", "create", net)
+    docker("network", "connect", net, spine)
+    docker("network", "connect", net, leaf)
+
+for node in nodes:
+    docker("run", "exec", "-dit", node, "/app/configure", "--name", node) # , "--url", url
