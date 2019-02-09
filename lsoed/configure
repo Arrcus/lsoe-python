@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import os, argparse, hashlib
+import os, argparse
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--name")
@@ -10,11 +10,13 @@ args = ap.parse_args()
 
 with open("/app/lsoed.cfg", "w") as f:
     f.write("[lsoe]\n")
+
     if args.name:
-        f.write("local-id = {}\n".format(
-            hashlib.md5((open("/sys/class/dmi/id/product_uuid").read() + args.name).encode("ascii")).digest()[:10].hex()))
+        f.write("local-id = {}\n".format((args.name.encode("ascii") + bytes(10))[:10].hex()))
+
     if args.url:
         f.write("report-rfc7752-url = {}\n".format(args.url))
+
     if args.broadcast:
         f.write("hello-multicast-macaddr = FF-FF-FF-FF-FF-FF\n")
 

@@ -12,22 +12,29 @@ import cherrypy, argparse, jinja2, time
 
 class Root(object):
 
-    def __init__(self, template_dir):
-        self.env = jinja2.Environment(loader = jinja2.FileSystemLoader(template_dir))
-        self.data = dict(latest = {})
+    def __init__(self, args):
+        self.env = jinja2.Environment(loader = jinja2.FileSystemLoader(args.templates))
+        self.status = {}
+        self.render = dict(
+            status        = self.status,
+            debug         = args.debug,
+            show_labels   = args.verbose,
+            show_pdu_name = args.verbose,
+            show_loopback = args.loopback)
 
     @cherrypy.expose
     def index(self):
-        return self.env.get_template("index.html").render(self.data)
+        return self.env.get_template("index.html").render(self.render)
 
     @cherrypy.expose
     @cherrypy.tools.json_in()
     def mutate(self):
+        now = time.time()
         val = dict(cherrypy.request.json,
-                   timestamp = time.time(),
+                   timestamp = time.strftime("%Y-%m-%d %H:%M:%S.{:06d}", time.gmtime(now)).format(int(now * 1000000) % 1000000),
                    client_ip = cherrypy.request.remote.ip)
         key = (cherrypy.request.remote.ip,) + tuple(val["unique"])
-        self.data["latest"][key] = val
+        self.status[key] = val
 
 HF = type("HF", (argparse.RawDescriptionHelpFormatter,
                  argparse.ArgumentDefaultsHelpFormatter), {})
@@ -35,9 +42,12 @@ ap = argparse.ArgumentParser(description = __doc__, formatter_class = HF)
 ap.add_argument("--host", default = "127.0.0.1",        help = "listener address")
 ap.add_argument("--port", default = 8080, type = int,   help = "listener port")
 ap.add_argument("--templates", default = "templates",   help = "template directory")
+ap.add_argument("--debug",    action = "store_true",    help = "enable raw data display")
+ap.add_argument("--verbose",  action = "store_true",    help = "show boring columns")
+ap.add_argument("--loopback", action = "store_true",    help = "show loopback encaps")
 args = ap.parse_args()
 
 cherrypy.config.update({"server.socket_host" : args.host,
                         "server.socket_port" : args.port })
 
-cherrypy.quickstart(Root(args.templates))
+cherrypy.quickstart(Root(args))

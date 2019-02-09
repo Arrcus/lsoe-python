@@ -8,6 +8,6 @@ test: all
 	sudo ./run-test
 
 clean:
-	-for i in ${NODES}; do docker stop $$i; done
+	-for i in ${NODES}; do docker stop $$i & done; wait
 	docker container prune -f
-	docker network prune -f
+#	docker network prune -f

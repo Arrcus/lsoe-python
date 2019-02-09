@@ -1,5 +1,3 @@
-{# Enable this to dump raw content of each database entry #}
-{% set debug = false %}
 <html>
   <head>
     <title>LSOE Status</title>
@@ -10,12 +8,13 @@
       }
       th, td {
         padding: 2px;
+        text-align: center;
       }
     </style>
   </head>
   <body>
     <h1>LSOE Status</h1>
-    {% for client, list in latest.values()|groupby("client_ip") %}
+    {% for client, list in status.values()|groupby("client_ip") %}
       {% for my_switch_id, list in list|groupby("my_switch_id") %}
         <h2>Switch  ID {{ my_switch_id }}</h2>
 	<table>
@@ -23,36 +22,48 @@
 	    <th>Interface</th>
 	    <th>Peer MAC</th>
 	    <th>Peer ID</th>
-	    <th>Type</th>
+	    {% if show_pdu_name %}
+	      <th>Type</th>
+	    {% endif %}
 	    <th>Prefix</th>
 	    <th>Flags</th>
-	    <th>Labels</th>
+	    {% if show_labels %}
+	      <th>Labels</th>
+	    {% endif %}
+	    <th>Timestamp</th>
 	  </tr>
           {% for interface, list in list|groupby("ifname") %}
             {% for peer_macaddr, list in list|groupby("peer_macaddr") %}
               {% for peer_switch_id, list in list|groupby("peer_switch_id") %}
 		{% for pdu_name, list in list|groupby("pdu_name") %}
                   {% for report in list %}
-                    {% for encap in report.encaps %}
-		      <tr>
-			<td>{{ interface }}</td>
-			<td>{{ peer_macaddr }}</td>
-			<td>{{ peer_switch_id }}</td>
-			<td>{{ pdu_name[:-13] }}</td>
-			<td>{{ encap.ipaddr }}/{{ encap.prefixlen }}</td>
-			<td>
-			  {% if encap.primary %} [Primary] {% endif %}
-			  {% if encap.loopback %} [Loopback] {% endif %}
-			</td>
-			<td>
-                          {% if encap.labels %}
-			    {% for label in encap.labels %}
-			      {{ label }}
-			    {% endfor %}
-                          {% endif %}
-			</td>
-		      </tr>
-                    {% endfor %}
+		    {% for encap in report.encaps %}
+		      {% if show_loopback or not encap.loopback %}
+			<tr>
+			  <td>{{ interface }}</td>
+			  <td>{{ peer_macaddr }}</td>
+			  <td>{{ peer_switch_id }}</td>
+			  {% if show_pdu_type  %}
+			    <td>{{ pdu_name[:-13] }}</td>
+			  {% endif %}
+			  <td>{{ encap.ipaddr }}/{{ encap.prefixlen }}</td>
+			  <td>
+			    {% if encap.primary %}  P {% endif %}
+			    {% if encap.loopback %} L {% endif %}
+			  </td>
+			  {% if show_labels %}
+			    <td>
+			      {% if encap.labels %}
+				{% for label in encap.labels %}
+				  {{ label }}
+				{% endfor %}
+			      {% endif %}
+			    </td>
+			  {% endif %}
+			  <td>{{ report.timestamp }}</td>
+			</tr>
+		      {% endif %}
+		    {% endfor %}
 		  {% endfor %}
 		{% endfor %}
 	      {% endfor %}
@@ -63,7 +74,7 @@
     {% endfor %}
     {% if debug %}
       <h1>Debug</h1>
-      <pre>{{ latest.values() | pprint }}</pre>
+      <pre>{{ status.values() | pprint }}</pre>
     {% endif %}
   </body>
 </html>

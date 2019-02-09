@@ -44,13 +44,13 @@ namespaces = tuple(NetNS(node) for node in nodes)
 for ns in namespaces:
     ns.setup()
 
-for spine, leaf in links:
-    run("ip", "link", "add", spine+leaf, "type", "veth", "peer", "name", leaf+spine)
-    run("ip", "link", "set", spine+leaf, "up", "netns", spine, "name", leaf)
-    run("ip", "link", "set", leaf+spine, "up", "netns", leaf,  "name", spine)
+for node1, node2 in links:
+    run("ip", "link", "add", node1 + node2, "type", "veth", "peer", "name", node2 + node1)
+    run("ip", "link", "set", node1 + node2, "up",   "netns", node1, "name", node2)
+    run("ip", "link", "set", node2 + node1, "up",   "netns", node2, "name", node1)
 
 for node in nodes:
-    run("docker", "exec", "-dit", node, "/app/configure", "--name", node, "--url", url, "--broadcast")
+    run("docker", "exec", "-it", node, "/app/configure", "--name", node, "--url", url)
 
 for ns in namespaces:
     ns.teardown()
