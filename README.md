@@ -11,8 +11,8 @@ instances configured to report RFC 7752 data to `kriek`.
 Assumptions
 -----------
 
-Assumes you have Python3, GNU make, and Docker installed, and that
-you're running on a Linux box whose primary interface is `eth0`.
+Assumes you have Python3, GNU make, PyYAML, and Docker installed, and
+that you're running on a Linux box whose primary interface is `eth0`.
 
 Usage
 -----
