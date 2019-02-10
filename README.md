@@ -11,8 +11,8 @@ instances configured to report RFC 7752 data to `kriek`.
 Assumptions
 -----------
 
-Assumes you have Python3, GNU make, PyYAML, and Docker installed, and
-that you're running on a Linux box whose primary interface is `eth0`.
+Assumes you have Python3, GNU make, and Docker installed, and that
+you're running on a Linux box whose primary interface is `eth0`.
 
 Usage
 -----
@@ -35,3 +35,8 @@ Caveats
 * Plain HTTP sucks, but so do stuffing private X.509 certificates
   into your browser for a demo or negotiating Let's Encrypt
   certificates in a container for a demo.  Sorry.
+
+* Assuming that the primary interface is `eth0` is lame, but
+  `gethostbyname(gethostname())` has an unfortunate tendency to return
+  `127.0.0.1`.  Maybe we can do something with
+  `getaddrinfo(gethostname(), 8080)`.
