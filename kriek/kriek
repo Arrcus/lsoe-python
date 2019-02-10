@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 Toy server using cherrypy and jinja2.
@@ -10,7 +10,7 @@ Toy server using cherrypy and jinja2.
 
 import cherrypy, argparse, jinja2, time
 
-class Root(object):
+class Root:
 
     def __init__(self, args):
         self.env = jinja2.Environment(loader = jinja2.FileSystemLoader(args.templates))

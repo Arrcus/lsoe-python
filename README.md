@@ -11,8 +11,7 @@ instances configured to report RFC 7752 data to `kriek`.
 Assumptions
 -----------
 
-Assumes you have Python3, GNU make, and Docker installed, and that
-you're running on a Linux box whose primary interface is `eth0`.
+Assumes Linux with Python3, GNU make, and Docker installed.
 
 Usage
 -----
@@ -36,7 +35,10 @@ Caveats
   into your browser for a demo or negotiating Let's Encrypt
   certificates in a container for a demo.  Sorry.
 
-* Assuming that the primary interface is `eth0` is lame, but
-  `gethostbyname(gethostname())` has an unfortunate tendency to return
-  `127.0.0.1`.  Maybe we can do something with
-  `getaddrinfo(gethostname(), 8080)`.
+* All mechanisms for determining a useful local IP address on Linux
+  without installing a third-party library like netifaces seem to be
+  kludges.  The classic `gethostbyname(gethostname())` usually just
+  returns the loopback address.  Using `ip route get` to ask what
+  local address would be picked for talking to some remote address
+  seems to work as well as anything, and better than making
+  assumptions about interface names.

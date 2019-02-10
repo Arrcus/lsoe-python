@@ -23,8 +23,8 @@ class NetNS:
         if os.path.islink(self.target):
             os.unlink(self.target)
 
-eth0 = subprocess.check_output(("ip", "addr", "list", "eth0")).decode("ascii").splitlines()
-addr = [line for line in eth0 if "inet " in line][0].replace("/", " ").split()[1]
+addr = subprocess.check_output(("ip", "route", "get", "8.8.8.8")).decode("ascii").split()
+addr = addr[addr.index("src") + 1]
 port = 8080
 url  = "http://{}:{}/mutate".format(addr, port)
 
