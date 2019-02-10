@@ -1,5 +1,3 @@
-NODES := $(sort kriek $(shell awk '/^- / {gsub(/[,\[\]]/, ""); print $$2, $$3}' topology.yaml))
-
 all:
 ifeq (,$(wildcard lsoed/src/lsoed))
 	git submodule update --init lsoed/src
@@ -7,10 +5,18 @@ endif
 	${MAKE} -C lsoed
 	${MAKE} -C kriek
 
-demo: all
+demo: all topology.json
 	sudo ./run-demo
 
+ifneq (,$(wildcard topology.json))
+FIND_NODES := 'import json; jj = json.load(open("topology.json")); print("\n".join([j[0] for j in jj] + [j[1] for j in jj]))'
+CLEAN_NODES = $(foreach NODE,$(sort kriek $(shell python3 -c ${FIND_NODES})), docker stop ${NODE} &)
+endif
+
 clean:
-	-for i in ${NODES}; do docker stop $$i & done; wait
+	-${CLEAN_NODES} wait
 	docker container prune -f
-#	docker network prune -f
+	rm -f topology.json topology.dot
+
+topology.json:
+	./generate-topology

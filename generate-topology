@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+
+# Generate default Clos topology as JSON.
+# Generate it as DOT too, what the heck.
+
+import os, json
+
+topology = (
+    tuple("spine{:d}".format(i) for i in range(4)),
+    tuple( "leaf{:d}".format(i) for i in range(8)))
+
+links = tuple(
+    (upper, lower)
+    for depth in range(len(topology) - 1)
+    for upper in topology[depth]
+    for lower in topology[depth + 1])
+
+with open("topology.json.tmp", "w") as f:
+    json.dump(links, f, indent = 2)
+os.rename("topology.json.tmp", "topology.json")
+
+with open("topology.dot.tmp", "w") as f:
+    f.write('''\
+graph {{
+
+    node [fontsize = 18];
+    edge [penwidth = 2];
+    node [shape = box3d];
+
+    edge [style = invis];
+{nodes}
+    edge [style = solid];
+{edges}
+}}
+'''.format(
+
+    nodes = "".join(
+        '''    subgraph {{ graph [rank = "{r}"]; {n} }}\n'''.format(
+            r = "min" if depth == 0 else "max" if depth == len(topology) - 1 else "same",
+            n = "".join("{}{}".format(box, " -- " if more else ";") for more, box in enumerate(row, 1 - len(row))))
+        for depth, row in enumerate(topology)),
+
+    edges = "".join(
+        '''    {} -- {};\n'''.format(upper, lower)
+        for upper, lower in links))
+    )
+os.rename("topology.dot.tmp", "topology.dot")

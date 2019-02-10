@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import os, yaml, subprocess
+import os, json, subprocess
 
 def run(*cmd):
     print("+ " + " ".join(cmd))
@@ -28,7 +28,7 @@ addr = [line for line in eth0 if "inet " in line][0].replace("/", " ").split()[1
 port = 8080
 url  = "http://{}:{}/mutate".format(addr, port)
 
-links = yaml.load(open("topology.yaml"))
+links = json.load(open("topology.json"))
 nodes = set()
 for link in links:
     nodes.update(link)
