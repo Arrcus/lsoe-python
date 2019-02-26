@@ -34,7 +34,7 @@ for link in links:
     nodes.update(link)
 nodes = sorted(nodes)
 
-run("docker", "run", "-dit", "-p={}:{}:{}".format(addr, port, port), "--name", "kriek", "kriek")
+run("docker", "run", "-dit", "--network=host", "--name", "kriek", "kriek")
 
 for node in nodes:
     run("docker", "run", "-dit", "--name", node, "--cap-add=NET_ADMIN", "lsoed")
