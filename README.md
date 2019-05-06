@@ -8,6 +8,19 @@ spine/leaf Clos topology, along with one instance of `kriek` (a
 monitoring tool based on CherryPy and Jinja2), with the `lsoed`
 instances configured to report RFC 7752 data to `kriek`.
 
+lsoed - an lsoe state machine
+=============================
+
+This is an implementation of the base LSoE protocol as described in
+https://tools.ietf.org/html/draft-ietf-lsvr-lsoe-01
+
+It is meant to augment the internet draft, not provide a fully functional
+tool.  lsoed is essentially a python3 state machine for the lsor protocol.
+It does not have the northbound interface to a BGP-LS API; but rather
+stubs to run the cherrypy lsoe-demo.
+
+It is not current with the L3DL internet drafts.
+
 Assumptions
 -----------
 
