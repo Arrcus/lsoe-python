@@ -17,7 +17,7 @@ https://tools.ietf.org/html/draft-ietf-lsvr-lsoe-01
 It is meant to augment the internet draft, not provide a functional
 product.  lsoed is a python3 state machine for the LSoE protocol.  It
 does not have the northbound interface to a BGP-LS API; but rather
-stubs to run the cherrypy lsoe-demo.
+stubs to run the CherryPy lsoe-demo.
 
 It is not current with the L3DL internet drafts.
 
