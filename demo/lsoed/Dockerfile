@@ -8,7 +8,7 @@ RUN mkdir /app
 COPY requirements.txt /app
 RUN  pip install -r /app/requirements.txt
 
-COPY configure waiter src/lsoed /app/
+COPY configure waiter lsoed /app/
 
 RUN  touch /app/blocked
 #CMD ["/app/waiter"]
