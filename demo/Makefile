@@ -1,6 +1,4 @@
 all: kriek.tar lsoed.tar
-	docker build -t kriek - < kriek.tar
-	docker build -t lsoed - < lsoed.tar
 
 test: start-demo
 
@@ -18,8 +16,14 @@ topology.json:
 	./generate-topology
 
 kriek.tar: $(shell find kriek -type f -print)
-	tar -C kriek -cvvf $@ .
+	tar -C $(basename $@) -cvvf $@ .
+	docker build -t $(basename $@) - < $@
 
 lsoed.tar: $(shell find lsoed -type f -print) ../lsoed
-	tar -C lsoed -cvvf $@ .
-	tar -C ..    -rvvf $@ lsoed
+	tar -C $(basename $@) -cvvf $@ .
+	tar -C ..             -rvvf $@ lsoed
+	docker build -t $(basename $@) - < $@
+
+.DELETE_ON_ERROR: kriek.tar lsoed.tar
+
+.PHONY: all test start-demo stop-demo clean
