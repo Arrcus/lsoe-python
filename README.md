@@ -9,7 +9,7 @@ product.  In particular, `lsoed` includes a Python3 state machine for
 the LSoE protocol.
 
 `lsoed` doesn't include the northbound interface to a BGP-LS API;
-intead, it has an HTTP stub client which drives a CherryPy-based demo.
+instead, it has an HTTP stub client which drives a CherryPy-based demo.
 
 `lsoed` is not current with the L3DL Internet-Drafts.
 
@@ -124,11 +124,16 @@ instances configured to report RFC 7752 data to `kriek`.
 In addition to the requirements for `lsoed` itself, the demo assumes a
 Linux environment (it configures a bunch of `veth` interfaces to set
 up the topology) with GNU make and Docker installed.  Building the
-demo will pull down Docker images and PyPi packages as needed.
+demo pulls down Docker images and PyPi packages as needed.
+
+Because most of the demo code is running under Docker, it's relatively
+insensitive to the version of Linux running on the host machine: we've
+tested it on Debian Jessie and Debian Stretch, but it would almost
+certainly work in many other Linux environments.
 
 ### Demo Usage
 
-Doing
+Running
 
 ```
 make test
@@ -161,5 +166,5 @@ to tweak something.
   kludges.  The classic `gethostbyname(gethostname())` usually just
   returns the loopback address.  Using `ip route get` to ask what
   local address would be picked for talking to some remote address
-  seems to work as well as anything, and works better than making
+  seems to work as well as anything, and works better than wiring in
   assumptions about interface names.
