@@ -1,7 +1,4 @@
 all:
-ifeq (,$(wildcard lsoed/src/lsoed))
-	git submodule update --init lsoed/src
-endif
 	${MAKE} -C lsoed
 	${MAKE} -C kriek
 

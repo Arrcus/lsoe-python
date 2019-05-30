@@ -1,3 +1,0 @@
-[submodule "lsoed/src"]
-	path = lsoed/src
-	url = gogs@gogs.sjc.arrcus.com:sra/lsoe-dev.git
